@@ -281,7 +281,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
   std::string strDbg = host->GetProfilePath();
   strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.challenge";
   FILE*f = fopen(strDbg.c_str(), "wb");
-  fwrite(wv_adapter->GetMessage(), 1, wv_adapter->GetMessageSize(), f);
+  fwrite(key_request_, 1, key_request_size_, f);
   fclose(f);
 #endif
 
