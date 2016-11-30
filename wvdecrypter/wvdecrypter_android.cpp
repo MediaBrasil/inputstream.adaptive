@@ -23,6 +23,8 @@
 #include "Ap4.h"
 #include <stdarg.h>
 #include <deque>
+#include <chrono>
+#include <thread>
 
 SSD_HOST *host = 0;
 
@@ -85,10 +87,14 @@ private:
   AP4_UI08 nal_length_size_;
 };
 
+bool needProvision = false;
 
 void MediaDrmEventListener(AMediaDrm *media_drm, const AMediaDrmSessionId *sessionId, AMediaDrmEventType eventType, int extra, const uint8_t *data, size_t dataSize)
 {
-  Log(SSD_HOST::LL_DEBUG, "EVENT occured (%d)", eventType);
+  Log(SSD_HOST::LL_DEBUG, "EVENT occured drm:%x, event:%d extra:%d dataSize;%d", (unsigned int)media_drm, eventType, extra, dataSize);
+  if (eventType == EVENT_PROVISION_REQUIRED )
+    needProvision = true;
+
 }
 
 /*----------------------------------------------------------------------
@@ -187,8 +193,16 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   if (license_url_.find('|') == std::string::npos)
     license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=false|JBlicense";
 
-  if (/*!ProvisionRequest() ||*/ !GetLicense())
+TRYAGAIN:
+  if (!GetLicense())
   {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    if (needProvision && ProvisionRequest())
+    {
+      needProvision = false;
+      goto TRYAGAIN;
+    }
     Log(SSD_HOST::LL_ERROR, "Unable to generate a license");
     AMediaDrm_closeSession(media_drm_, &session_id_);
     AMediaDrm_release(media_drm_);
@@ -210,21 +224,29 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
 bool WV_CencSingleSampleDecrypter::ProvisionRequest()
 {
   const char *url(0);
+  size_t prov_size(4096);
 
-  media_status_t status = AMediaDrm_getProvisionRequest(media_drm_, &key_request_, &key_request_size_, &url);
+  Log(SSD_HOST::LL_ERROR, "PrivisionData request: drm: %x key_request_size_: %u", (unsigned int)media_drm_, key_request_size_);
+
+  media_status_t status = AMediaDrm_getProvisionRequest(media_drm_, &key_request_, &prov_size, &url);
 
   if (status != AMEDIA_OK || !url)
   {
     Log(SSD_HOST::LL_ERROR, "PrivisionData request failed with status: %d", status);
     return false;
   }
-  Log(SSD_HOST::LL_DEBUG, "PrivisionData: status: %d, size: %u, url: %s", status, key_request_size_, url);
+  Log(SSD_HOST::LL_DEBUG, "PrivisionData: status: %d, size: %u, url: %s", status, prov_size, url);
 
-  std::string tmp_str(url);
-  tmp_str += "&signedRequest=";
-  tmp_str += std::string(reinterpret_cast<const char*>(key_request_), key_request_size_);
+  std::string tmp_str("{\"signedRequest\":\"");
+  tmp_str += std::string(reinterpret_cast<const char*>(key_request_), prov_size);
+  tmp_str += "\"}";
 
-  void* file = host->CURLCreate(tmp_str.c_str());
+  std::string encoded = b64_encode(reinterpret_cast<const unsigned char*>(tmp_str.data()), tmp_str.size(), false);
+
+  void* file = host->CURLCreate(url);
+  host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "Content-Type", "application/json");
+  host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "seekable", "0");
+  host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "postdata", encoded.c_str());
 
   if (!host->CURLOpen(file))
   {
@@ -239,8 +261,10 @@ bool WV_CencSingleSampleDecrypter::ProvisionRequest()
   while ((nbRead = host->ReadFile(file, buf, 8192)) > 0)
     tmp_str += std::string((const char*)buf, nbRead);
 
-  Log(SSD_HOST::LL_DEBUG, tmp_str.c_str());
-  return false;
+  status = AMediaDrm_provideProvisionResponse(media_drm_, reinterpret_cast<const uint8_t *>(tmp_str.c_str()), tmp_str.size());
+
+  Log(SSD_HOST::LL_DEBUG, "provideProvisionResponse: status %d", status);
+  return status == AMEDIA_OK;;
 }
 
 
@@ -269,7 +293,6 @@ bool WV_CencSingleSampleDecrypter::GetLicense()
 
 bool WV_CencSingleSampleDecrypter::SendSessionMessage()
 {
-
   std::vector<std::string> headers, header, blocks = split(license_url_, '|');
   if (blocks.size() != 4)
   {
