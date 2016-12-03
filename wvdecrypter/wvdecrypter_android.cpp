@@ -503,42 +503,51 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
 
     if (nal_length_size_ && subsample_count)
     {
+      //Note that we assume that there is enough data in data_out to hold everything without reallocating.
+
       //check NAL / subsample
-      const AP4_Byte *packet_in_tmp(data_in.GetData()), *packet_in_tmp_e(data_in.GetData() + data_in.GetDataSize());
-      while (packet_in_tmp < packet_in_tmp_e)
+      const AP4_Byte *packet_in(data_in.GetData()), *packet_in_e(data_in.GetData() + data_in.GetDataSize());
+      AP4_Byte *packet_out(data_out.UseData() + data_out.GetDataSize());
+      AP4_UI16 *clrb_out(reinterpret_cast<AP4_UI16*>(data_out.UseData() + sizeof(subsample_count)));
+      unsigned int nalunitcount(0), nalunitsum(0);
+
+      while (packet_in < packet_in_e && subsample_count)
       {
         uint32_t nalsize(0);
-        for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in_tmp++; };
-        if (nalsize + nal_length_size_ != *bytes_of_cleartext_data + *bytes_of_encrypted_data)
-        {
-          Log(SSD_HOST::LL_ERROR, "Mismatch NAL / Subsample (nls: %d) %d -> &d ", nal_length_size_, nalsize + nal_length_size_, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
-          return AP4_ERROR_NOT_SUPPORTED;
-        }
-        ++bytes_of_cleartext_data;
-        ++bytes_of_encrypted_data;
-        packet_in_tmp += nalsize;
-      }
+        for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
 
-      //convert avc -> annexb by simply removing nal 4-byte header with anex-b startcode 
-      AP4_Size oldSize(data_out.GetDataSize());
-      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + (4 - nal_length_size_) * subsample_count);
-
-      const AP4_Byte *packet_in(data_in.GetData());
-      AP4_Byte *packet_out(data_out.UseData() + oldSize);
-      AP4_UI16 *clrb(reinterpret_cast<AP4_UI16*>(data_out.UseData() + sizeof(subsample_count)));
-      AP4_UI32 *ciphb(reinterpret_cast<AP4_UI32*>(clrb + subsample_count));
-
-      for (unsigned int i(0); i < subsample_count; ++i)
-      {
         //Anex-B Start pos
         packet_out[0] = packet_out[1] = packet_out[2] = 0; packet_out[3] = 1;
-        memcpy(&packet_out[4], &packet_in[nal_length_size_], clrb[i] + ciphb[i] - nal_length_size_);
-        packet_in += (clrb[i] + ciphb[i]);
-        clrb[i] += (4 - nal_length_size_);
-        packet_out += (clrb[i] + ciphb[i]);
+        packet_out += 4;
+        memcpy(packet_out, packet_in, nalsize);
+        packet_in += nalsize;
+        packet_out += nalsize;
+        *clrb_out += (4 - nal_length_size_);
+        ++nalunitcount;
+
+        if (nalsize + nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        {
+          Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", nal_length_size_, nalsize + nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
+          return AP4_ERROR_NOT_SUPPORTED;
+        }
+        else if (nalsize + nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        {
+          ++bytes_of_cleartext_data;
+          ++bytes_of_encrypted_data;
+          ++clrb_out;
+          --subsample_count;
+          nalunitsum = 0;
+        }
+        else
+          nalunitsum += nalsize + nal_length_size_;
       }
-    }
-    else
+      if (packet_in != packet_in_e || subsample_count)
+      {
+        Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
+        return AP4_ERROR_NOT_SUPPORTED;
+      }
+      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + (4 - nal_length_size_) * nalunitcount);
+    }else
       data_out.AppendData(data_in.GetData(), data_in.GetDataSize());
   }
   return AP4_SUCCESS;
