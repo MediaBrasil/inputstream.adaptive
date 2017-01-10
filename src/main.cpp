@@ -914,7 +914,7 @@ Session::Session(MANIFEST_TYPE manifestType, const char *strURL, const char *str
   }
   if (*strCert)
   {
-    size_t sz(strlen(strCert)), dstsz((sz * 3) / 4);
+    unsigned int sz(strlen(strCert)), dstsz((sz * 3) / 4);
     server_certificate_.SetDataSize(dstsz);
     b64_decode(strCert, sz, server_certificate_.UseData(), dstsz);
   }
