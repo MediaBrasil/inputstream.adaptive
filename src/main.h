@@ -21,6 +21,7 @@
 
 #include "common/AdaptiveTree.h"
 #include "common/AdaptiveStream.h"
+#include "msl.h"
 #include <float.h>
 
 #include "Ap4.h"
@@ -79,7 +80,8 @@ enum MANIFEST_TYPE
 {
   MANIFEST_TYPE_UNKNOWN,
   MANIFEST_TYPE_MPD,
-  MANIFEST_TYPE_ISM
+  MANIFEST_TYPE_ISM,
+  MANIFEST_TYPE_NXMSL
 };
 
 

@@ -18,6 +18,7 @@
 
 #include "main.h"
 
+
 #include <iostream>
 #include <stdio.h>
 #include <string.h>
@@ -30,6 +31,7 @@
 #include "SSD_dll.h"
 #include "parser/DASHTree.h"
 #include "parser/SmoothTree.h"
+#include "parser/NxMslTree.h"
 
 #define SAFE_DELETE(p)       do { delete (p);     (p)=NULL; } while (0)
 
@@ -185,27 +187,45 @@ Kodi Streams implementation
 
 bool adaptive::AdaptiveTree::download(const char* url)
 {
-  // open the file
-  void* file = xbmc->CURLCreate(url);
-  if (!file)
-    return false;
-  xbmc->CURLAddOption(file, XFILE::CURL_OPTION_PROTOCOL, "seekable", "0");
-  xbmc->CURLAddOption(file, XFILE::CURL_OPTION_PROTOCOL, "acceptencoding", "gzip");
-  xbmc->CURLOpen(file, XFILE::READ_CHUNKED | XFILE::READ_NO_CACHE);
+    std::cout << "dowenload" <<std::endl;
 
-  // read the file
-  static const unsigned int CHUNKSIZE = 16384;
-  char buf[CHUNKSIZE];
-  size_t nbRead;
-  while ((nbRead = xbmc->ReadFile(file, buf, CHUNKSIZE)) > 0 && ~nbRead && write_data(buf, nbRead));
+    //TODO add manifesttype to AdaptiveTree
+    //For now Assume that smooth and dash have correct http/https urls
+    std::string http = "http";
+    if (http.compare(0,4, url) == 0) {
+        std::cout << "http found" << std::endl;
+        // open the file
+        void* file = xbmc->CURLCreate(url);
+        if (!file)
+            return false;
+        xbmc->CURLAddOption(file, XFILE::CURL_OPTION_PROTOCOL, "seekable", "0");
+        xbmc->CURLAddOption(file, XFILE::CURL_OPTION_PROTOCOL, "acceptencoding", "gzip");
+        xbmc->CURLOpen(file, XFILE::READ_CHUNKED | XFILE::READ_NO_CACHE);
 
-  //download_speed_ = xbmc->GetFileDownloadSpeed(file);
+        // read the file
+        static const unsigned int CHUNKSIZE = 16384;
+        char buf[CHUNKSIZE];
+        size_t nbRead;
+        while ((nbRead = xbmc->ReadFile(file, buf, CHUNKSIZE)) > 0 && ~nbRead && write_data(buf, nbRead));
 
-  xbmc->CloseFile(file);
+        //download_speed_ = xbmc->GetFileDownloadSpeed(file);
 
-  xbmc->Log(ADDON::LOG_DEBUG, "Download %s finished", url);
+        xbmc->CloseFile(file);
 
-  return nbRead == 0;
+        xbmc->Log(ADDON::LOG_DEBUG, "Download %s finished", url);
+
+        return nbRead == 0;
+    }
+    else {
+        MSLFilter *mslFilter = new MSLFilter();
+        mslFilter->msl_initialize(xbmc);
+        std::string manifest = mslFilter->msl_download_manifest(url);
+
+        char *cstr = new char[manifest.length() + 1];
+        strcpy(cstr, manifest.c_str());
+        write_data(cstr, manifest.length());
+        return true;
+    }
 }
 
 bool KodiAdaptiveStream::download(const char* url, const char* rangeHeader)
@@ -853,9 +873,12 @@ Session::Session(MANIFEST_TYPE manifestType, const char *strURL, const char *str
   case MANIFEST_TYPE_MPD:
     adaptiveTree_ = new adaptive::DASHTree;
     break;
-  case MANIFEST_TYPE_ISM:
-    adaptiveTree_ = new adaptive::SmoothTree;
-    break;
+    case MANIFEST_TYPE_ISM:
+      adaptiveTree_ = new adaptive::SmoothTree;
+      break;
+    case MANIFEST_TYPE_NXMSL:
+      adaptiveTree_ = new adaptive::NxMslTree;
+      break;
   default:;
   };
 
@@ -1094,6 +1117,7 @@ bool Session::initialize()
   // Try to initialize an SingleSampleDecryptor
   if (adaptiveTree_->encryptionState_)
   {
+      std::cout << "encryptionState" << std::endl;
     AP4_DataBuffer init_data;
 
     if (adaptiveTree_->pssh_.second == "FILE")
@@ -1350,7 +1374,6 @@ extern "C" {
 
     if (!hdl)
       return ADDON_STATUS_UNKNOWN;
-
     xbmc = new ADDON::CHelper_libXBMC_addon;
     if (!xbmc->RegisterMe(hdl))
     {
@@ -1368,6 +1391,10 @@ extern "C" {
     }
 
     xbmc->Log(ADDON::LOG_DEBUG, "ADDON_Create()");
+
+//    MSLFilter *mslFilter = new MSLFilter();
+//    mslFilter->msl_initialize(xbmc);
+
 
     curAddonStatus = ADDON_STATUS_OK;
     return curAddonStatus;
@@ -1453,6 +1480,8 @@ extern "C" {
           manifest = MANIFEST_TYPE_MPD;
         else if (strcmp(props.m_ListItemProperties[i].m_strValue, "ism") == 0)
           manifest = MANIFEST_TYPE_ISM;
+        else if (strcmp(props.m_ListItemProperties[i].m_strValue, "nxmsl") == 0)
+          manifest = MANIFEST_TYPE_NXMSL;
       }
     }
 
@@ -1587,7 +1616,7 @@ extern "C" {
         AP4_Track::TYPE_AUDIO,
         AP4_Track::TYPE_TEXT };
 
-      if (session->GetManifestType() == MANIFEST_TYPE_ISM && stream->stream_.getRepresentation()->get_initialization() == nullptr)
+      if ((session->GetManifestType() == MANIFEST_TYPE_ISM) && stream->stream_.getRepresentation()->get_initialization() == nullptr)
       {
         //We'll create a Movie out of the things we got from manifest file
         //note: movie will be deleted in destructor of stream->input_file_
@@ -1615,7 +1644,7 @@ extern "C" {
 
       if (movie == NULL)
       {
-        xbmc->Log(ADDON::LOG_ERROR, "No MOOV in stream!");
+        xbmc->Log(ADDON::LOG_ERROR, "No MOOV in stream mothafucka!");
         return stream->disable();
       }
 
