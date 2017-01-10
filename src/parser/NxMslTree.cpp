@@ -92,7 +92,7 @@ bool NxMslTree::parseManifest() {
 
     //One Downloadable is one representation
     for (size_t i = 0; i != video_track["downloadables"].size(); i++) {
-        Json::Value downloadable = video_track["downloadables"][i];
+        Json::Value downloadable = video_track["downloadables"][(int)i];
         //URLs have "random" ids
         //TODO there must be a better solution for this
         std::string url;
@@ -147,7 +147,7 @@ bool NxMslTree::parseManifest() {
 
     //One Downloadable is one representation
     for (size_t i = 0; i != audio_track["downloadables"].size(); i++) {
-        Json::Value downloadable = audio_track["downloadables"][i];
+        Json::Value downloadable = audio_track["downloadables"][(int)i];
 
 
         //URLs have "random" ids

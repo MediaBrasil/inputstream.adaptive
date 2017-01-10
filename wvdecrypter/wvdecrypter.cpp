@@ -20,6 +20,7 @@
 #include "../src/helpers.h"
 #include "../src/SSD_dll.h"
 #include "jsmn.h"
+#include <iostream>
 #include "Ap4.h"
 #include <stdarg.h>
 #include <deque>
@@ -27,7 +28,9 @@
 #ifndef WIDEVINECDMFILENAME
 #error  "WIDEVINECDMFILENAME must be set"
 #endif
-
+#ifndef _DEBUG
+#define  _DEBUG
+#endif
 
 SSD_HOST *host = 0;
 
@@ -366,8 +369,12 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
   }
 
   // read the file
-  while ((nbRead = host->ReadFile(file, buf, 1024)) > 0)
-    response += std::string((const char*)buf, nbRead);
+    std::cout << "Readfile begin" << std::endl;
+  while ((nbRead = host->ReadFile(file, buf, 1024)) > 0) {
+    std::cout << "decryptor" << std::endl;
+    std::cout << buf << std::endl;
+    response += std::string((const char *) buf, nbRead);
+  }
 
   host->CloseFile(file);
   file = 0;
@@ -424,8 +431,15 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       Log(SSD_HOST::LL_ERROR, "Unsupported License request template (response)");
       goto SSMFAIL;
     }
-  } else //its binary - simply push the returned data as update
-    wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(response.data()), response.size());
+  } else { //its binary - simply push the returned data as update
+//      std::cout << "its binary" << std::endl;
+//      unsigned int decoded_size = 2048;
+//      uint8_t decoded[2048];
+//      b64_decode(response.c_str(), response.size(), decoded, decoded_size);
+//      std::cout << decoded_size << std::endl;
+//      wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(decoded), decoded_size);
+      wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(response.data()), response.size());
+  }
 
   return true;
 SSMFAIL:

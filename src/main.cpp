@@ -56,23 +56,78 @@ public:
 
   virtual void* CURLCreate(const char* strURL) override
   {
+      if (this->isNxMsl) {
+
+          msl = new MSLFilter();
+          msl->msl_initialize(xbmc);
+          std::cout << "LICENCE REQUEST VIA MSL: " << std::endl;
+      }
     return xbmc->CURLCreate(strURL);
   };
 
   virtual bool CURLAddOption(void* file, CURLOPTIONS opt, const char* name, const char * value)override
   {
-    const XFILE::CURLOPTIONTYPE xbmcmap[] = {XFILE::CURL_OPTION_PROTOCOL, XFILE::CURL_OPTION_HEADER};
-    return xbmc->CURLAddOption(file, xbmcmap[opt], name, value);
+      if(!isNxMsl) {
+          const XFILE::CURLOPTIONTYPE xbmcmap[] = {XFILE::CURL_OPTION_PROTOCOL, XFILE::CURL_OPTION_HEADER};
+          return xbmc->CURLAddOption(file, xbmcmap[opt], name, value);
+      }
+      else {
+          //name == postdata
+          if (strcmp(name, "postdata") == 0) {
+              std::cout << "CHALLANGE DATA:" << std::endl;
+              std::cout << value << std::endl;
+                std::string s(value);
+              challenge = s;
+//              this->challenge = *value;
+              //This is the
+          }
+      }
   }
 
   virtual bool CURLOpen(void* file)override
   {
+      if(isNxMsl) {
+          //msl->msl_download_manifest("");
+
+          std::cout << "CHALLANGE IN URLOPEN" << std::endl;
+          std::cout << this->challenge << std::endl;
+       this->license = msl->msl_download_license(this->challenge.c_str());
+          std::cout << "LICENSE:" << std::endl;
+          std::cout << license << std::endl;
+      }
     return xbmc->CURLOpen(file, XFILE::READ_NO_CACHE);
   };
 
   virtual size_t ReadFile(void* file, void* lpBuf, size_t uiBufSize)override
   {
-    return xbmc->ReadFile(file, lpBuf, uiBufSize);
+      if (!isNxMsl) {
+          return xbmc->ReadFile(file, lpBuf, uiBufSize);
+      }
+      else {
+          if(!this->license.empty()) {
+              std::cout << "string length" << std::endl;
+              std::cout << this->license.length()<< std::endl;
+
+              unsigned int decoded_size = 2048;
+              uint8_t decoded[2048];
+              b64_decode(this->license.c_str(), this->license.length(), decoded, decoded_size);
+
+
+
+              memcpy(lpBuf, decoded, decoded_size);
+//              strcpy(cstr, this->license.c_str());
+//              std::cout << cstr << std::endl;
+//              const char *wurst = license.c_str();
+//              lpBuf = this->license.Data();
+              size_t length = this->license.length();
+              this->license = "";
+              return decoded_size;
+          }
+          else {
+              return 0;
+          }
+      }
+
   };
 
   virtual void CloseFile(void* file)override
@@ -91,6 +146,10 @@ public:
     return xbmc->Log(xbmcmap[level], msg);
   };
 
+    void setIsNxMsl() {
+        this->isNxMsl = true;
+    }
+
   void SetLibraryPath(const char *libraryPath)
   {
     m_strLibraryPath = libraryPath;
@@ -100,6 +159,10 @@ public:
     if (m_strLibraryPath.size() && m_strLibraryPath.back() != pathSep[0])
       m_strLibraryPath += pathSep;
   }
+
+    void setNxMlsTree(adaptive::AdaptiveTree *nxMslTree) {
+        this->nxMslTree = nxMslTree;
+    }
 
   void SetProfilePath(const char *profilePath)
   {
@@ -123,6 +186,11 @@ public:
 
 private:
   std::string m_strProfilePath, m_strLibraryPath;
+    adaptive::AdaptiveTree *nxMslTree;
+    std::string challenge;
+    std::string license;
+    bool isNxMsl;
+    MSLFilter *msl;
 
 }kodihost;
 
@@ -877,7 +945,9 @@ Session::Session(MANIFEST_TYPE manifestType, const char *strURL, const char *str
       adaptiveTree_ = new adaptive::SmoothTree;
       break;
     case MANIFEST_TYPE_NXMSL:
+
       adaptiveTree_ = new adaptive::NxMslTree;
+          kodihost.setNxMlsTree(adaptiveTree_);
       break;
   default:;
   };
@@ -937,9 +1007,9 @@ Session::Session(MANIFEST_TYPE manifestType, const char *strURL, const char *str
   }
   if (*strCert)
   {
-    size_t sz(strlen(strCert)), dstsz((sz * 3) / 4);
+    unsigned int sz(strlen(strCert)), dstsz((sz * 3) / 4);
     server_certificate_.SetDataSize(dstsz);
-    b64_decode(strCert, sz, server_certificate_.UseData(), dstsz);
+  b64_decode(strCert, sz, server_certificate_.UseData(), dstsz);
   }
 }
 
@@ -1491,8 +1561,11 @@ extern "C" {
           manifest = MANIFEST_TYPE_MPD;
         else if (strcmp(props.m_ListItemProperties[i].m_strValue, "ism") == 0)
           manifest = MANIFEST_TYPE_ISM;
-        else if (strcmp(props.m_ListItemProperties[i].m_strValue, "nxmsl") == 0)
-          manifest = MANIFEST_TYPE_NXMSL;
+        else if (strcmp(props.m_ListItemProperties[i].m_strValue, "nxmsl") == 0) {
+            manifest = MANIFEST_TYPE_NXMSL;
+            kodihost.setIsNxMsl();
+        }
+
       }
     }
 

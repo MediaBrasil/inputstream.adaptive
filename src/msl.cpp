@@ -371,7 +371,7 @@ std::string MSLFilter::perform_msl_post_request(std::string url, std::string pos
     void *file = kodi->CURLCreate(url.c_str());
 
     // Convert Post Data to base64 Data
-    std::string postDataBase = b64_encode(reinterpret_cast<const unsigned char *>(postData.c_str()), postData.length(), false);
+    std::string postDataBase = b64_encode(reinterpret_cast<const unsigned char *>(postData.c_str()), postData.size(), false);
 
     //Create CURL Request
     kodi->CURLAddOption(file, XFILE::CURL_OPTION_PROTOCOL, "Content-Type", "application/json");
@@ -384,6 +384,9 @@ std::string MSLFilter::perform_msl_post_request(std::string url, std::string pos
     char buf[2048];
     while ((nbRead = kodi->ReadFile(file, buf, 1024)) > 0)
         response += std::string((const char *) buf, nbRead);
+
+
+    std::cout << response << std::endl;
 
     return response;
 }
@@ -512,9 +515,17 @@ std::string MSLFilter::generate_msl_request(Json::Value requestData) {
     //Serialize the request Data
     Json::FastWriter *writer = new Json::FastWriter;
     std::string serializedRequestData = writer->write(requestData);
+
+
     //cause jsoncpp is goddamn old version fastwriter adds a newline at the end of the json
     serializedRequestData = serializedRequestData.substr(0, serializedRequestData.size()-1);
 
+    //Dirty quickfix for xid long
+    serializedRequestData = serializedRequestData.substr(0, serializedRequestData.size()-1); // remove }
+    serializedRequestData += ", \"xid\":213123123123}";
+
+
+    std::cout << serializedRequestData << std::endl;
 
     //Serialized Data will be includes in other json so escape the "
     replaceAll(serializedRequestData,  "\"", "\\\"");
@@ -720,15 +731,15 @@ std::string MSLFilter::msl_download_manifest(const char *url) {
 }
 
 
-bool MSLFilter::msl_download_license() {
+std::string MSLFilter::msl_download_license(const char* challengeStr) {
     Json::Value licenseRequestData;
     licenseRequestData["method"] = "license";
     licenseRequestData["clientTime"] = 1484007307;
+    licenseRequestData["challengeBase64"] = challengeStr;
     licenseRequestData["clientVersion"] = "4.0005.887.011";
     licenseRequestData["licenseType"] = "STANDARD";
     licenseRequestData["playbackContextId"] = "E1-BQFRAAELEB32o6Se-GFvjwEIbvDydEtfj6zNzEC3qwfweEPAL3gTHHT2V8rS_u1Mc3mw5BWZrUlKYIu4aArdjN8z_Z8t62E5jRjLMdCKMsVhlSJpiQx0MNW4aGqkYz-1lPh85Quo4I_mxVBG5lgd166B5NDizA8.";
     licenseRequestData["uiVersion"] = "akira";
-    licenseRequestData["xid"] = "14840073003517";
     licenseRequestData["languages"] = Json::arrayValue;
     licenseRequestData["languages"].append("de-DE");
     licenseRequestData["drmContextIds"] = Json::arrayValue;
@@ -736,21 +747,26 @@ bool MSLFilter::msl_download_license() {
 
     licenseRequestData["challenges"] = Json::arrayValue;
     Json::Value challenge;
-    challenge["dataBase64"] = "";
-    challenge["sessionId"] = "";
+    challenge["dataBase64"] = challengeStr;
+    challenge["sessionId"] = "0DEE0A9AB7FC50C1EE647C0B99CB9FF3";
     licenseRequestData["challenges"].append(challenge);
 
 
     //Generate the request POST Data
     std::string requestData = this->generate_msl_request(licenseRequestData);
+    std::cout << requestData << std::endl;
 
     //Get plain response cause chunked payloads
     std::string response = this->perform_msl_post_request("http://www.netflix.com/api/msl/NFCDCH-LX/cadmium/license", requestData);
 
     //Parse the msl response
-    std::string license = this->parse_msl_response(response);
+    std::string licenseStr = this->parse_msl_response(response);
+    Json::Value licenseJson;
+    Json::Reader reader;
+    reader.parse(licenseStr, licenseJson);
 
-    std::cout << license << std::endl;
+    return licenseJson["result"]["licenseResponseBase64"].asString();
+
 
 }
 

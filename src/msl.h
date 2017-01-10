@@ -43,7 +43,7 @@ public:
     };
   bool msl_initialize(ADDON::CHelper_libXBMC_addon *xbmc);
   std::string msl_download_manifest(const char *url);
-  bool msl_download_license();
+  std::string msl_download_license(const char *challengeStr);
 
 private:
     std::string publicKey;
