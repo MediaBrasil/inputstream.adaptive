@@ -49,7 +49,7 @@ class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter
 {
 public:
   // methods
-  WV_CencSingleSampleDecrypter(std::string licenseURL, const uint8_t *pssh, size_t pssh_size);
+  WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &pssh, AP4_DataBuffer &serverCertificate);
   ~WV_CencSingleSampleDecrypter();
 
   bool initialized()const { return media_drm_ != 0; };
@@ -101,19 +101,19 @@ void MediaDrmEventListener(AMediaDrm *media_drm, const AMediaDrmSessionId *sessi
 |   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
 
-WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseURL, const uint8_t *pssh, size_t pssh_size)
+WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &pssh, AP4_DataBuffer &serverCertificate)
   : AP4_CencSingleSampleDecrypter(0)
   , media_drm_(0)
   , license_url_(licenseURL)
-  , pssh_(std::string(reinterpret_cast<const char*>(pssh), pssh_size))
+  , pssh_(std::string(reinterpret_cast<const char*>(pssh.GetData()), pssh.GetDataSize()))
   , key_size_(0)
   , nal_length_size_(0)
 {
   SetParentIsOwner(false);
 
-  if (pssh_size > 256)
+  if (pssh.GetDataSize() > 256)
   {
-    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh_size);
+    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
     return;
   }
 
@@ -565,9 +565,9 @@ public:
     return 0;
   };
 
-  AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec) override
+  AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec, AP4_DataBuffer &serverCertificate) override
   {
-    AP4_CencSingleSampleDecrypter *res = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec.GetData(), streamCodec.GetDataSize());
+    AP4_CencSingleSampleDecrypter *res = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
     if (!((WV_CencSingleSampleDecrypter*)res)->initialized())
     {
       delete res;
