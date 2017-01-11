@@ -182,6 +182,10 @@ namespace adaptive
     std::vector<Period*> periods_;
     std::string base_url_;
 
+      //NXMSL SPECIFIC
+      std::string playbackContextId;
+      std::string drmContextId;
+
     /* XML Parsing*/
     XML_Parser parser_;
     uint32_t currentNode_;

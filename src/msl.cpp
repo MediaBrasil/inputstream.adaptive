@@ -38,6 +38,7 @@
 #include "helpers.h"
 #include "string.h"
 
+#include <ctime>
 #include <errno.h>
 #include <zlib.h>
 #include <openssl/err.h>
@@ -522,7 +523,10 @@ std::string MSLFilter::generate_msl_request(Json::Value requestData) {
 
     //Dirty quickfix for xid long
     serializedRequestData = serializedRequestData.substr(0, serializedRequestData.size()-1); // remove }
-    serializedRequestData += ", \"xid\":213123123123}";
+    serializedRequestData += ", \"xid\":";
+    serializedRequestData += requestData["clientTime"].asString();
+    serializedRequestData += "1618}";
+
 
 
     std::cout << serializedRequestData << std::endl;
@@ -530,7 +534,7 @@ std::string MSLFilter::generate_msl_request(Json::Value requestData) {
     //Serialized Data will be includes in other json so escape the "
     replaceAll(serializedRequestData,  "\"", "\\\"");
 
-    std::string plaintextRequest = "[{},{\"headers\":{},\"path\":\"/cbp/cadmium-5\",\"payload\":{\"data\":\""+serializedRequestData+"\"},\"query\":\"\"}]\n";
+    std::string plaintextRequest = "[{},{\"headers\":{},\"path\":\"/cbp/cadmium-11\",\"payload\":{\"data\":\""+serializedRequestData+"\"},\"query\":\"\"}]\n";
 
 
     std::string compressedPlaintextRequest = compress_string(plaintextRequest, Z_BEST_COMPRESSION);
@@ -655,6 +659,8 @@ std::string MSLFilter::parse_msl_response(std::string response) {
     this->serviceTokens = decryptedHeader["servicetokens"];
     this->useridtoken = decryptedHeader["useridtoken"];
 
+    std::cout << decryptedHeader << std::endl;
+
 
     //Extract, Decrypt the payload
     Json::Value jsonPayload;
@@ -668,6 +674,9 @@ std::string MSLFilter::parse_msl_response(std::string response) {
     std::string iv = encryptionEnvelope["iv"].asString();
 
     std::string decrypted = this->AESDecrypt(chipertext, iv);
+
+    std::cout << decrypted << std::endl;
+
     Json::Value decryptedJson;
     reader.parse(decrypted, decryptedJson);
     std::string compressedManifest = decryptedJson["data"].asString();
@@ -706,6 +715,7 @@ std::string MSLFilter::msl_download_manifest(const char *url) {
     manifestRequestData["sessionParams"]["uiplaycontext"] = "null";
     manifestRequestData["sessionId"] = "14673889385265";
 
+    manifestRequestData["usePlayReadyHeaderObject"] = false;
 
     manifestRequestData["flavor"] = "PRE_FETCH";
     manifestRequestData["secureUrls"] = false;
@@ -713,7 +723,7 @@ std::string MSLFilter::msl_download_manifest(const char *url) {
     manifestRequestData["forceClearStreams"] = false;
     manifestRequestData["languages"] = Json::arrayValue;
     manifestRequestData["languages"].append("de-DE");
-    manifestRequestData["clientVersion"] = "4.0004.899.011";
+    manifestRequestData["clientVersion"] = "4.0005.887.011";
     manifestRequestData["uiVersion"] = "akira";
 
     //Generate the request POST Data
@@ -731,30 +741,33 @@ std::string MSLFilter::msl_download_manifest(const char *url) {
 }
 
 
-std::string MSLFilter::msl_download_license(const char* challengeStr) {
+std::string MSLFilter::msl_download_license(const char* challengeStr, const char* playbackContextId, const char* sessionId, const char* drmContextId) {
     Json::Value licenseRequestData;
+
+    std::time_t t = std::time(0);  // t is an integer type
     licenseRequestData["method"] = "license";
-    licenseRequestData["clientTime"] = 1484007307;
-    licenseRequestData["challengeBase64"] = challengeStr;
+    licenseRequestData["clientTime"] = (int)t;
+    //licenseRequestData["challengeBase64"] = challengeStr;
     licenseRequestData["clientVersion"] = "4.0005.887.011";
     licenseRequestData["licenseType"] = "STANDARD";
-    licenseRequestData["playbackContextId"] = "E1-BQFRAAELEB32o6Se-GFvjwEIbvDydEtfj6zNzEC3qwfweEPAL3gTHHT2V8rS_u1Mc3mw5BWZrUlKYIu4aArdjN8z_Z8t62E5jRjLMdCKMsVhlSJpiQx0MNW4aGqkYz-1lPh85Quo4I_mxVBG5lgd166B5NDizA8.";
+    licenseRequestData["playbackContextId"] = playbackContextId;//"E1-BQFRAAELEB32o6Se-GFvjwEIbvDydEtfj6zNzEC3qwfweEPAL3gTHHT2V8rS_u1Mc3mw5BWZrUlKYIu4aArdjN8z_Z8t62E5jRjLMdCKMsVhlSJpiQx0MNW4aGqkYz-1lPh85Quo4I_mxVBG5lgd166B5NDizA8.";
     licenseRequestData["uiVersion"] = "akira";
     licenseRequestData["languages"] = Json::arrayValue;
     licenseRequestData["languages"].append("de-DE");
     licenseRequestData["drmContextIds"] = Json::arrayValue;
-    licenseRequestData["drmContextIds"].append(1484007307);
+    licenseRequestData["drmContextIds"].append(drmContextId);
 
     licenseRequestData["challenges"] = Json::arrayValue;
     Json::Value challenge;
     challenge["dataBase64"] = challengeStr;
-    challenge["sessionId"] = "0DEE0A9AB7FC50C1EE647C0B99CB9FF3";
+    challenge["sessionId"] = sessionId;
     licenseRequestData["challenges"].append(challenge);
+
+    std::cout << licenseRequestData << std::endl;
 
 
     //Generate the request POST Data
     std::string requestData = this->generate_msl_request(licenseRequestData);
-    std::cout << requestData << std::endl;
 
     //Get plain response cause chunked payloads
     std::string response = this->perform_msl_post_request("http://www.netflix.com/api/msl/NFCDCH-LX/cadmium/license", requestData);
@@ -765,8 +778,39 @@ std::string MSLFilter::msl_download_license(const char* challengeStr) {
     Json::Reader reader;
     reader.parse(licenseStr, licenseJson);
 
-    return licenseJson["result"]["licenseResponseBase64"].asString();
+    std::cout << licenseJson << std::endl;
 
+
+    return licenseJson["result"]["licenses"][(int)0]["data"].asString();
+
+
+}
+
+std::string MSLFilter::msl_bind() {
+    Json::Value bindData;
+
+    bindData["method"] = "bind";
+    bindData["clientVersion"] = "4.0005.887.011";
+    bindData["uiVersion"] = "akira";
+    bindData["languages"] = Json::arrayValue;
+    bindData["languages"].append("de-DE");
+
+
+    //Generate the request POST Data
+    std::string requestData = this->generate_msl_request(bindData);
+
+    //Get plain response cause chunked payloads
+    std::string response = this->perform_msl_post_request("http://www.netflix.com/api/msl/NFCDCH-LX/cadmium/bind", requestData);
+
+//    //Parse the msl response
+//    std::string licenseStr = this->parse_msl_response(response);
+//    Json::Value licenseJson;
+//    Json::Reader reader;
+//    reader.parse(licenseStr, licenseJson);
+//
+//    std::cout << licenseJson << std::endl;
+
+    return "";
 
 }
 

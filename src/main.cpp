@@ -58,8 +58,8 @@ public:
   {
       if (this->isNxMsl) {
 
-          msl = new MSLFilter();
-          msl->msl_initialize(xbmc);
+//          msl = new MSLFilter();
+//          msl->msl_initialize(xbmc);
           std::cout << "LICENCE REQUEST VIA MSL: " << std::endl;
       }
     return xbmc->CURLCreate(strURL);
@@ -76,8 +76,29 @@ public:
           if (strcmp(name, "postdata") == 0) {
               std::cout << "CHALLANGE DATA:" << std::endl;
               std::cout << value << std::endl;
-                std::string s(value);
-              challenge = s;
+                //std::string s(value);
+
+              unsigned int decoded_size = 4096;
+              uint8_t decoded[4096];
+              b64_decode(value, strlen(value), decoded, decoded_size);
+              std::string decodedString((char*)decoded, decoded_size);
+
+
+              std::cout << "asdasdsadsadasdasdas"<< std::endl;
+              std::cout << decodedString << std::endl;
+
+
+              std::vector<std::string>  blocks = split(decodedString, '!');
+
+
+//              unsigned int decoded_size = 4096;
+//              uint8_t decoded[4096];
+              b64_decode(blocks[1].c_str(), blocks[1].length(), decoded, decoded_size);
+              std::string sid((char*)decoded, decoded_size);
+              this->sessionId = sid;
+
+
+              challenge = blocks[0];
 //              this->challenge = *value;
               //This is the
           }
@@ -88,12 +109,13 @@ public:
   {
       if(isNxMsl) {
           //msl->msl_download_manifest("");
-
           std::cout << "CHALLANGE IN URLOPEN" << std::endl;
           std::cout << this->challenge << std::endl;
-       this->license = msl->msl_download_license(this->challenge.c_str());
+       this->license = msl->msl_download_license(this->challenge.c_str(), this->nxMslTree->playbackContextId.c_str(), this->sessionId.c_str(), this->nxMslTree->drmContextId.c_str());
           std::cout << "LICENSE:" << std::endl;
           std::cout << license << std::endl;
+
+          std::cout << this->nxMslTree->playbackContextId << std::endl;
       }
     return xbmc->CURLOpen(file, XFILE::READ_NO_CACHE);
   };
@@ -164,6 +186,10 @@ public:
         this->nxMslTree = nxMslTree;
     }
 
+    void setMslFilter(MSLFilter *filter) {
+        this->msl = filter;
+    }
+
   void SetProfilePath(const char *profilePath)
   {
     m_strProfilePath = profilePath;
@@ -188,6 +214,7 @@ private:
   std::string m_strProfilePath, m_strLibraryPath;
     adaptive::AdaptiveTree *nxMslTree;
     std::string challenge;
+    std::string sessionId;
     std::string license;
     bool isNxMsl;
     MSLFilter *msl;
@@ -288,6 +315,7 @@ bool adaptive::AdaptiveTree::download(const char* url)
         MSLFilter *mslFilter = new MSLFilter();
         mslFilter->msl_initialize(xbmc);
         std::string manifest = mslFilter->msl_download_manifest(url);
+        kodihost.setMslFilter(mslFilter);
 
         char *cstr = new char[manifest.length() + 1];
         strcpy(cstr, manifest.c_str());
@@ -706,7 +734,7 @@ public:
       if (AP4_FAILED(result = m_Decrypter->DecryptSampleData(m_encrypted, m_sample_data_, NULL)))
       {
         xbmc->Log(ADDON::LOG_ERROR, "Decrypt Sample returns failure!");
-        if (++m_fail_count_ > 50)
+        if (++m_fail_count_ > 200)
         {
           Reset(true);
           return result;
@@ -1193,7 +1221,6 @@ bool Session::initialize()
   // Try to initialize an SingleSampleDecryptor
   if (adaptiveTree_->encryptionState_)
   {
-      std::cout << "encryptionState" << std::endl;
     AP4_DataBuffer init_data;
 
     if (adaptiveTree_->pssh_.second == "FILE")
@@ -1553,6 +1580,7 @@ extern "C" {
       {
         xbmc->Log(ADDON::LOG_DEBUG, "found inputstream.adaptive.server_certificate: [not shown]");
         lsc = props.m_ListItemProperties[i].m_strValue;
+        std::cout << lsc << std::endl;
       }
       else if (strcmp(props.m_ListItemProperties[i].m_strKey, "inputstream.adaptive.manifest_type") == 0)
       {

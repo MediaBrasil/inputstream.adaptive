@@ -52,12 +52,15 @@ bool NxMslTree::parseManifest() {
     this->base_time_ = ~0ULL;
 
 
+    this->playbackContextId = viewables["playbackContextId"].asString();
+    this->drmContextId = viewables["drmContextId"].asString();
+
     //Add pssh
     this->pssh_.first = "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
-    this->pssh_.second = viewables["psshb64"].asString();
+    this->pssh_.second = viewables["psshb64"][(int)0].asString();
 
     this->adp_pssh_.first = "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
-    this->adp_pssh_.second =  viewables["psshb64"].asString();
+    this->adp_pssh_.second =  viewables["psshb64"][(int)0].asString();
 
     //this->defaultKID_ = viewables["keyId"].asString();
 
@@ -109,7 +112,7 @@ bool NxMslTree::parseManifest() {
         this->current_representation_->duration_ = 1000;
         this->current_representation_->width_ = downloadable["width"].asInt();
         this->current_representation_->height_ = downloadable["height"].asInt();
-        this->current_representation_->fpsRate_ = downloadable["bitrate"].asInt();
+        //this->current_representation_->fpsRate_ = downloadable["bitrate"].asInt();
         this->current_representation_->codecs_ = "h264";
         //this->current_representation_->flags_ |= NxMslTree::Representation::TEMPLATE;
 
@@ -127,7 +130,6 @@ bool NxMslTree::parseManifest() {
     this->current_adaptationset_->base_url_ = this->current_representation_->url_;
     this->current_adaptationset_->encrypted = true;
     this->current_adaptationset_->timescale_ = 1000;
-    this->adp_pssh_.second.clear();
     this->adpChannelCount_ = 2;
     this->adpwidth_ = this->current_representation_->width_;
     this->adpheight_ =this->current_representation_->height_;
@@ -142,7 +144,7 @@ bool NxMslTree::parseManifest() {
     //Create one Adptionset
     this->current_adaptationset_ = new NxMslTree::AdaptationSet();
     //Add the Adaptionset to the period
-    this->current_period_->adaptationSets_.push_back(this->current_adaptationset_);
+    //this->current_period_->adaptationSets_.push_back(this->current_adaptationset_);
 
 
     //One Downloadable is one representation
@@ -181,7 +183,6 @@ bool NxMslTree::parseManifest() {
     this->current_adaptationset_->segment_durations_.data.reserve(100);
     //this->current_adaptationset_->base_url_ = this->current_representation_->url_;
     this->current_adaptationset_->encrypted = false;
-    this->adp_pssh_.second.clear();
     this->adpChannelCount_ = 2;
     this->current_adaptationset_->type_ = NxMslTree::AUDIO;
 

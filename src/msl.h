@@ -43,7 +43,7 @@ public:
     };
   bool msl_initialize(ADDON::CHelper_libXBMC_addon *xbmc);
   std::string msl_download_manifest(const char *url);
-  std::string msl_download_license(const char *challengeStr);
+  std::string msl_download_license(const char *challengeStr, const char* playbackContextId, const char* sessionId, const char* drmContextId);
 
 private:
     std::string publicKey;
@@ -65,7 +65,7 @@ private:
     std::string sign(std::string payload);
     std::string b64_decode_string(std::string const& encoded_string);
 
-
+    std::string msl_bind();
 
     std::string perform_msl_post_request(std::string url, std::string postData);
     Json::Value perform_msl_post_json_request(std::string url, std::string postData);
