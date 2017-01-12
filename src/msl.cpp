@@ -362,6 +362,7 @@ Json::Value MSLFilter::perform_msl_post_json_request(std::string url, std::strin
     //Make a sanity check. Meas check if a error message is present
     if (mslResponse.isMember("errordata")) {
         std::string errorMessage = this->b64_decode_string(mslResponse["errordata"].asString());
+        kodi->Log(ADDON::LOG_DEBUG, "Error in Keyexchange: %s ", errorMessage.c_str());
         std::cout << errorMessage << std::endl;
     }
     return mslResponse;
@@ -385,9 +386,6 @@ std::string MSLFilter::perform_msl_post_request(std::string url, std::string pos
     char buf[2048];
     while ((nbRead = kodi->ReadFile(file, buf, 1024)) > 0)
         response += std::string((const char *) buf, nbRead);
-
-
-    std::cout << response << std::endl;
 
     return response;
 }
@@ -528,9 +526,6 @@ std::string MSLFilter::generate_msl_request(Json::Value requestData) {
     serializedRequestData += "1618}";
 
 
-
-    std::cout << serializedRequestData << std::endl;
-
     //Serialized Data will be includes in other json so escape the "
     replaceAll(serializedRequestData,  "\"", "\\\"");
 
@@ -590,13 +585,11 @@ Json::Value MSLFilter::generate_msl_header() {
 
     //Determine if auth by username and/password or use tokens if already present
     if (this->useridtoken == Json::nullValue && this->serviceTokens == Json::nullValue) {
-        std::cout << "Add userdata" << std::endl;
         headerData["userauthdata"]["scheme"] = "EMAIL_PASSWORD";
         headerData["userauthdata"]["authdata"]["password"] = "";
         headerData["userauthdata"]["authdata"]["email"] = "";
     }
     else {
-        std::cout << "Add User and Service Tokens" << std::endl;
         headerData["servicetokens"] = this->serviceTokens;
         headerData["useridtoken"] = this->useridtoken;
     }
@@ -659,9 +652,6 @@ std::string MSLFilter::parse_msl_response(std::string response) {
     this->serviceTokens = decryptedHeader["servicetokens"];
     this->useridtoken = decryptedHeader["useridtoken"];
 
-    std::cout << decryptedHeader << std::endl;
-
-
     //Extract, Decrypt the payload
     Json::Value jsonPayload;
     reader.parse(respPayloadStr, jsonPayload);
@@ -672,19 +662,24 @@ std::string MSLFilter::parse_msl_response(std::string response) {
 
     std::string chipertext = encryptionEnvelope["ciphertext"].asString();
     std::string iv = encryptionEnvelope["iv"].asString();
-
     std::string decrypted = this->AESDecrypt(chipertext, iv);
-
-    std::cout << decrypted << std::endl;
 
     Json::Value decryptedJson;
     reader.parse(decrypted, decryptedJson);
-    std::string compressedManifest = decryptedJson["data"].asString();
-    std::string decompressedManifestPayload = this->decompress_string(this->b64_decode_string(compressedManifest));
+
+    //Check if data is compressd
+    std::string data = decryptedJson["data"].asString();
+    if (decryptedJson.isMember("compressionalgo")) {
+      data = this->decompress_string(this->b64_decode_string(data));
+    }
 
     Json::Value plainTextJsonResponse;
-    reader.parse(decompressedManifestPayload, plainTextJsonResponse);
+    reader.parse(data, plainTextJsonResponse);
 
+    //Check response status if error log data
+    if(plainTextJsonResponse[(int)1]["status"].asString() != "200") {
+        kodi->Log(ADDON::LOG_DEBUG, "Error in MSL Response: %s", data.c_str());
+    }
 
     return this->b64_decode_string(plainTextJsonResponse[(int)1]["payload"]["data"].asString());
 
@@ -763,8 +758,6 @@ std::string MSLFilter::msl_download_license(const char* challengeStr, const char
     challenge["sessionId"] = sessionId;
     licenseRequestData["challenges"].append(challenge);
 
-    std::cout << licenseRequestData << std::endl;
-
 
     //Generate the request POST Data
     std::string requestData = this->generate_msl_request(licenseRequestData);
@@ -775,15 +768,20 @@ std::string MSLFilter::msl_download_license(const char* challengeStr, const char
     //Parse the msl response
     std::string licenseStr = this->parse_msl_response(response);
     Json::Value licenseJson;
+
     Json::Reader reader;
     reader.parse(licenseStr, licenseJson);
 
-    std::cout << licenseJson << std::endl;
+    //Check if request was successfull
+    if (!licenseJson["success"].asBool()) {
+        kodi->Log(ADDON::LOG_DEBUG, "License MSL Request Data: %s", licenseRequestData);
+        kodi->Log(ADDON::LOG_DEBUG, "License Plain MSL Response: %s", response.c_str());
+        kodi->Log(ADDON::LOG_DEBUG, "License Parsed MSL Response: %s", licenseStr.c_str());
+        throw(std::runtime_error("MSL License request was NOT successful!"));
+    }
 
 
     return licenseJson["result"]["licenses"][(int)0]["data"].asString();
-
-
 }
 
 std::string MSLFilter::msl_bind() {

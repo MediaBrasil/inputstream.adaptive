@@ -72,35 +72,25 @@ public:
           return xbmc->CURLAddOption(file, xbmcmap[opt], name, value);
       }
       else {
-          //name == postdata
           if (strcmp(name, "postdata") == 0) {
-              std::cout << "CHALLANGE DATA:" << std::endl;
-              std::cout << value << std::endl;
-                //std::string s(value);
 
+              //Decode the post Data
               unsigned int decoded_size = 4096;
               uint8_t decoded[4096];
               b64_decode(value, strlen(value), decoded, decoded_size);
               std::string decodedString((char*)decoded, decoded_size);
 
-
-              std::cout << "asdasdsadsadasdasdas"<< std::endl;
-              std::cout << decodedString << std::endl;
-
-
+              // Challange and Session id are seperated by !
               std::vector<std::string>  blocks = split(decodedString, '!');
 
+              //Challenge in first block
+              this->challenge = blocks[0];
 
-//              unsigned int decoded_size = 4096;
-//              uint8_t decoded[4096];
+
+              //session id is in base64 so decode
               b64_decode(blocks[1].c_str(), blocks[1].length(), decoded, decoded_size);
               std::string sid((char*)decoded, decoded_size);
               this->sessionId = sid;
-
-
-              challenge = blocks[0];
-//              this->challenge = *value;
-              //This is the
           }
       }
   }
@@ -108,16 +98,11 @@ public:
   virtual bool CURLOpen(void* file)override
   {
       if(isNxMsl) {
-          //msl->msl_download_manifest("");
-          std::cout << "CHALLANGE IN URLOPEN" << std::endl;
-          std::cout << this->challenge << std::endl;
-       this->license = msl->msl_download_license(this->challenge.c_str(), this->nxMslTree->playbackContextId.c_str(), this->sessionId.c_str(), this->nxMslTree->drmContextId.c_str());
-          std::cout << "LICENSE:" << std::endl;
-          std::cout << license << std::endl;
-
-          std::cout << this->nxMslTree->playbackContextId << std::endl;
+          xbmc->Log(ADDON::LOG_DEBUG, "Challenge in License Request: %s ", this->challenge.c_str());
+          this->license = msl->msl_download_license(this->challenge.c_str(), this->nxMslTree->playbackContextId.c_str(), this->sessionId.c_str(), this->nxMslTree->drmContextId.c_str());
+          xbmc->Log(ADDON::LOG_DEBUG, "Licnese: %s ", this->license.c_str());
       }
-    return xbmc->CURLOpen(file, XFILE::READ_NO_CACHE);
+      return xbmc->CURLOpen(file, XFILE::READ_NO_CACHE);
   };
 
   virtual size_t ReadFile(void* file, void* lpBuf, size_t uiBufSize)override
@@ -1033,12 +1018,13 @@ Session::Session(MANIFEST_TYPE manifestType, const char *strURL, const char *str
   default:
     media_type_mask_ = static_cast<uint8_t>(~0);
   }
-  if (*strCert)
-  {
-    unsigned int sz(strlen(strCert)), dstsz((sz * 3) / 4);
-    server_certificate_.SetDataSize(dstsz);
-  b64_decode(strCert, sz, server_certificate_.UseData(), dstsz);
-  }
+    if (*strCert)
+    {
+        unsigned int sz(strlen(strCert)), dstsz((sz * 3) / 4);
+        server_certificate_.SetDataSize(dstsz);
+        b64_decode(strCert, sz, server_certificate_.UseData(), dstsz);
+        server_certificate_.SetDataSize(dstsz);
+    }
 }
 
 Session::~Session()
