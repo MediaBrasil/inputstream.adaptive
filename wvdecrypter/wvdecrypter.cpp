@@ -217,6 +217,11 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
     return;
   }
 
+    if (serverCertificate.GetDataSize())
+    {
+        wv_adapter->SetServerCertificate(0, serverCertificate.GetData(), serverCertificate.GetDataSize());
+    }
+
   // For backward compatibility: If no | is found in URL, make the amazon convention out of it
   if (license_url_.find('|') == std::string::npos)
     license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=false|JBlicense";
@@ -342,12 +347,12 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
     insPos = blocks[2].find("{SSM}");
     if (insPos != std::string::npos)
     {
-      std::string::size_type sidSearchPos(insPos + 6);
+      std::string::size_type sidSearchPos(insPos);
       if (insPos >= 0)
       {
         if (blocks[2][insPos - 1] == 'B')
         {
-          std::string msgEncoded = b64_encode(wv_adapter->GetMessage(), wv_adapter->GetMessageSize(), false);
+          std::string msgEncoded = b64_encode(wv_adapter->GetMessage(), wv_adapter->GetMessageSize(), true);
           blocks[2].replace(insPos - 1, 6, msgEncoded);
           sidSearchPos += msgEncoded.size();
         }
@@ -363,14 +368,14 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
         goto SSMFAIL;
       }
 
-      insPos = blocks[2].find("{SID}");
+      insPos = blocks[2].find("{SID}", sidSearchPos);
       if (insPos != std::string::npos)
       {
         if (insPos >= 0)
         {
           if (blocks[2][insPos - 1] == 'B')
           {
-            std::string msgEncoded = b64_encode(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize(), false);
+            std::string msgEncoded = b64_encode(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize(), true);
             blocks[2].replace(insPos - 1, 6, msgEncoded);
           }
           else
@@ -394,10 +399,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
   }
 
   // read the file
-    std::cout << "Readfile begin" << std::endl;
   while ((nbRead = host->ReadFile(file, buf, 1024)) > 0) {
-    std::cout << "decryptor" << std::endl;
-    std::cout << buf << std::endl;
     response += std::string((const char *) buf, nbRead);
   }
 
@@ -457,12 +459,6 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       goto SSMFAIL;
     }
   } else { //its binary - simply push the returned data as update
-//      std::cout << "its binary" << std::endl;
-//      unsigned int decoded_size = 2048;
-//      uint8_t decoded[2048];
-//      b64_decode(response.c_str(), response.size(), decoded, decoded_size);
-//      std::cout << decoded_size << std::endl;
-//      wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(decoded), decoded_size);
       wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(response.data()), response.size());
   }
 

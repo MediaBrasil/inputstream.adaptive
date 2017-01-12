@@ -363,7 +363,6 @@ Json::Value MSLFilter::perform_msl_post_json_request(std::string url, std::strin
     if (mslResponse.isMember("errordata")) {
         std::string errorMessage = this->b64_decode_string(mslResponse["errordata"].asString());
         kodi->Log(ADDON::LOG_DEBUG, "Error in Keyexchange: %s ", errorMessage.c_str());
-        std::cout << errorMessage << std::endl;
     }
     return mslResponse;
 }
@@ -493,17 +492,6 @@ std::string MSLFilter::AESEncrypt(std::string payload, int sequenceNumber) {
     //
 
     return serializedEncryptionEnvelope;
-}
-
-
-void replaceAll(std::string& str, const std::string& from, const std::string& to) {
-    if(from.empty())
-        return;
-    size_t start_pos = 0;
-    while((start_pos = str.find(from, start_pos)) != std::string::npos) {
-        str.replace(start_pos, from.length(), to);
-        start_pos += to.length(); // In case 'to' contains 'from', like replacing 'x' with 'yx'
-    }
 }
 
 std::string MSLFilter::generate_msl_request(Json::Value requestData) {

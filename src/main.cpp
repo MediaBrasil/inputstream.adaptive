@@ -18,8 +18,7 @@
 
 #include "main.h"
 
-
-#include <iostream>
+#include <algorithm>
 #include <stdio.h>
 #include <string.h>
 #include <sstream>
@@ -57,10 +56,7 @@ public:
   virtual void* CURLCreate(const char* strURL) override
   {
       if (this->isNxMsl) {
-
-//          msl = new MSLFilter();
-//          msl->msl_initialize(xbmc);
-          std::cout << "LICENCE REQUEST VIA MSL: " << std::endl;
+          //
       }
     return xbmc->CURLCreate(strURL);
   };
@@ -81,13 +77,17 @@ public:
               std::string decodedString((char*)decoded, decoded_size);
 
               // Challange and Session id are seperated by !
-              std::vector<std::string>  blocks = split(decodedString, '!');
+              std::vector<std::string> blocks = split(decodedString, '!');
 
               //Challenge in first block
               this->challenge = blocks[0];
+              replaceAll(this->challenge,"%2B", "+");
+              replaceAll(this->challenge, "%2F", "/");
 
 
               //session id is in base64 so decode
+              replaceAll(blocks[1],"%2B", "+");
+              replaceAll(blocks[1], "%2F", "/");
               b64_decode(blocks[1].c_str(), blocks[1].length(), decoded, decoded_size);
               std::string sid((char*)decoded, decoded_size);
               this->sessionId = sid;
@@ -112,20 +112,11 @@ public:
       }
       else {
           if(!this->license.empty()) {
-              std::cout << "string length" << std::endl;
-              std::cout << this->license.length()<< std::endl;
 
               unsigned int decoded_size = 2048;
               uint8_t decoded[2048];
               b64_decode(this->license.c_str(), this->license.length(), decoded, decoded_size);
-
-
-
               memcpy(lpBuf, decoded, decoded_size);
-//              strcpy(cstr, this->license.c_str());
-//              std::cout << cstr << std::endl;
-//              const char *wurst = license.c_str();
-//              lpBuf = this->license.Data();
               size_t length = this->license.length();
               this->license = "";
               return decoded_size;
@@ -267,13 +258,11 @@ Kodi Streams implementation
 
 bool adaptive::AdaptiveTree::download(const char* url)
 {
-    std::cout << "dowenload" <<std::endl;
 
     //TODO add manifesttype to AdaptiveTree
     //For now Assume that smooth and dash have correct http/https urls
     std::string http = "http";
     if (http.compare(0,4, url) == 0) {
-        std::cout << "http found" << std::endl;
         // open the file
         void* file = xbmc->CURLCreate(url);
         if (!file)
@@ -1566,7 +1555,6 @@ extern "C" {
       {
         xbmc->Log(ADDON::LOG_DEBUG, "found inputstream.adaptive.server_certificate: [not shown]");
         lsc = props.m_ListItemProperties[i].m_strValue;
-        std::cout << lsc << std::endl;
       }
       else if (strcmp(props.m_ListItemProperties[i].m_strKey, "inputstream.adaptive.manifest_type") == 0)
       {

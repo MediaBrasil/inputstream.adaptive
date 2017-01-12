@@ -122,9 +122,8 @@ void CdmAdapter::Initialize(const std::string& cdm_path)
 
 	if (cdm_)
 	{
-//		cdm_->Initialize(cdm_config_.allow_distinctive_identifier,
-//			cdm_config_.allow_persistent_state);
-        cdm_->Initialize(false, false);
+		cdm_->Initialize(cdm_config_.allow_distinctive_identifier,
+			cdm_config_.allow_persistent_state);
 	}
 	else
 	{

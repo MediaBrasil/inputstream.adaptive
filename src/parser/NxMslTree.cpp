@@ -41,7 +41,6 @@ bool NxMslTree::parseManifest() {
     Json::Value responseHeader;
     Json::Reader reader;
     reader.parse(jsonString, manifest);
-    std::cout << "paresed json" << std::endl;
 
 
     Json::Value viewables = manifest["result"]["viewables"][(int)0];
@@ -125,7 +124,6 @@ bool NxMslTree::parseManifest() {
 
 
     }
-    std::cout << "endfor" << std::endl;
     this->current_adaptationset_->segment_durations_.data.reserve(100);
     this->current_adaptationset_->base_url_ = this->current_representation_->url_;
     this->current_adaptationset_->encrypted = true;
@@ -161,7 +159,6 @@ bool NxMslTree::parseManifest() {
             break;
         }
 
-        std::cout << url << std::endl;
 
         this->current_representation_ = new NxMslTree::Representation();
         this->current_representation_->channelCount_ = 2;
@@ -179,7 +176,6 @@ bool NxMslTree::parseManifest() {
 
 
     }
-    std::cout << "endfor" << std::endl;
     this->current_adaptationset_->segment_durations_.data.reserve(100);
     //this->current_adaptationset_->base_url_ = this->current_representation_->url_;
     this->current_adaptationset_->encrypted = false;
@@ -202,9 +198,6 @@ bool NxMslTree::parseManifest() {
 bool NxMslTree::open(const char *url)
 {
   bool ret = download(url);
-  std::cout << jsonString << std::endl;
-
-    std::cout << "Parse the Manifest" << std::endl;
     parseManifest();
   return ret;
 }
