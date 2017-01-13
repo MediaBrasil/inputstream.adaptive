@@ -286,6 +286,13 @@ bool WV_CencSingleSampleDecrypter::GetLicense()
   if (!SendSessionMessage())
     return false;
 
+  AMediaDrmKeyValue pairs[100];
+  size_t numpairs(100);
+  media_status_t AMediaDrm_queryKeyStatus(media_drm_, &session_id_, pairs, &numPairs);
+
+  for (size_t i(0); i < numpairs; ++i)
+    Log(SSD_HOST::LL_DEBUG, "KeyStatus: %s:%s", pairs[i].mKey, pairs[i].mValue");
+
   Log(SSD_HOST::LL_DEBUG, "License update successful");
 
   return true;

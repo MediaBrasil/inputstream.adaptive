@@ -27,7 +27,16 @@ public:
     kSessionClosed,
     kLegacySessionError
   };
+
+  enum LOGLEVEL
+  {
+    kLogDebug,
+    kLogInfo,
+    kLogError
+  };
+
   virtual void OnCDMMessage(CDMADPMSG msg) = 0;
+  virtual void CDMLog(LOGLEVEL level, const char *msg) = 0;
 };
 
 class CdmAdapter : NON_EXPORTED_BASE(public cdm::Host_8)

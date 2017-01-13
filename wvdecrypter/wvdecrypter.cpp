@@ -114,6 +114,11 @@ public:
     messages_.push_back(msg);
   };
 
+  virtual void CDMLog(media::CdmAdapterClient::LOGLEVEL level, const char* msg) override
+  {
+	  host->Log(static_cast<SSD_HOST::LOGLEVEL>(level), msg);
+  };
+
   virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size)override;
 
   virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
