@@ -53,16 +53,18 @@ else()
     add_definitions(-D__STDC_FORMAT_MACROS)
 endif()
 
+
 if(CORE_SYSTEM_NAME STREQUAL android)
-    set(DECRYPTERPATH "special://xbmcbinaddons")
+  add_subdirectory(wvdecrypter)
+  set(DECRYPTERPATH "special://xbmcbinaddons")
+  install(FILES $<TARGET_FILE:ssd_wv> DESTINATION lib/${APP_NAME_LC}/addons/inputstream.adaptive)
 else()
-    set(DECRYPTERPATH "special://home/cdm")
+  set(DECRYPTERPATH "special://home/cdm")
+  add_subdirectory(lib/libbento4)
 endif()
 
 message(STATUS "ZLIB_LIBRARIES: ${ZLIB_LIBRARIES}")
 
-
-add_subdirectory(lib/libbento4)
 list(APPEND DEPLIBS bento4 ${OPENSSL_LIBRARIES} ${ZLIB_LIBRARIES} ${JSONCPP_LIBRARIES})
 
 build_addon(inputstream.adaptive ADP DEPLIBS)

@@ -57,6 +57,8 @@
 #define MOD_GZIP_ZLIB_CFACTOR    9
 #define MOD_GZIP_ZLIB_BSIZE      8096
 
+#define ESN "NFANDROID1-PRV-P-L3-LGE==LG-H815-4445-D84C7A0CF12DBE3DB897B895B15D0CFEC4FF7EBE3F81D14D1F8EC90ED87ADB12"
+
 static const std::string base64_chars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
                 "abcdefghijklmnopqrstuvwxyz"
@@ -277,7 +279,7 @@ bool MSLFilter::perform_key_exchange() {
     request["headerdata"] = encodedHeaderJson;
     request["signature"] = "";
     request["entityauthdata"]["scheme"] = "NONE";
-    request["entityauthdata"]["authdata"]["identity"] = "NFCDCH-LX-CQE0NU6PA5714R25VPLXVU2A193T36"; //TODO Add generated or fetched entity id?!
+    request["entityauthdata"]["authdata"]["identity"] = ESN; //TODO Add generated or fetched entity id?!
 
     std::string requestJson = writer->write(request);
 
@@ -478,7 +480,11 @@ std::string MSLFilter::AESEncrypt(std::string payload, int sequenceNumber) {
     //Create the Encryption Envelope for the encoded data
     Json::Value encryptionEnvelope;
     encryptionEnvelope["ciphertext"] = encHeaderBase64;
-    encryptionEnvelope["keyid"] = "NFCDCH-LX-CQE0NU6PA5714R25VPLXVU2A193T36_" + std::to_string(this->sequenceNumber);
+
+    std::ostringstream oss;
+    oss << ESN << "_" << this->sequenceNumber;;
+    encryptionEnvelope["keyid"] = oss.str();
+
     encryptionEnvelope["sha256"] = "AA==";
     encryptionEnvelope["iv"] = b64_encode(reinterpret_cast<unsigned char *>(iv), 16, false);
 
@@ -566,7 +572,7 @@ Json::Value MSLFilter::generate_msl_header() {
 
 
     headerData["renewable"] = true;
-    headerData["sender"] = "NFCDCH-LX-CQE0NU6PA5714R25VPLXVU2A193T36";
+    headerData["sender"] = ESN;
     headerData["recipient"] = "Netflix";
     headerData["messageid"] = 23; //TODO some random number
 
@@ -762,7 +768,9 @@ std::string MSLFilter::msl_download_license(const char* challengeStr, const char
 
     //Check if request was successfull
     if (!licenseJson["success"].asBool()) {
-        kodi->Log(ADDON::LOG_DEBUG, "License MSL Request Data: %s", licenseRequestData);
+        Json::FastWriter *writer = new Json::FastWriter;
+        std::string mslRequestData = writer->write(licenseRequestData);
+        kodi->Log(ADDON::LOG_DEBUG, "License MSL Request Data: %s", mslRequestData.c_str());
         kodi->Log(ADDON::LOG_DEBUG, "License Plain MSL Response: %s", response.c_str());
         kodi->Log(ADDON::LOG_DEBUG, "License Parsed MSL Response: %s", licenseStr.c_str());
         throw(std::runtime_error("MSL License request was NOT successful!"));

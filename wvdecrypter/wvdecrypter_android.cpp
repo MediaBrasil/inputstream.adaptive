@@ -350,11 +350,12 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
     insPos = blocks[2].find("{SSM}");
     if (insPos != std::string::npos)
     {
+      std::string::size_type sidSearchPos(insPos);
       if (insPos >= 0)
       {
         if (blocks[2][insPos - 1] == 'B')
         {
-          std::string msgEncoded = b64_encode(key_request_, key_request_size_, true);
+          std::string msgEncoded = b64_encode(key_request_, key_request_size_, false);
           blocks[2].replace(insPos - 1, 6, msgEncoded);
         }
         else
@@ -364,6 +365,26 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       {
         Log(SSD_HOST::LL_ERROR, "Unsupported License request template (body)");
         goto SSMFAIL;
+      }
+
+      insPos = blocks[2].find("{SID}", sidSearchPos);
+      if (insPos != std::string::npos)
+      {
+        if (insPos >= 0)
+        {
+          if (blocks[2][insPos - 1] == 'B')
+          {
+            std::string msgEncoded = b64_encode(session_id_.ptr, session_id_.length, false);
+            blocks[2].replace(insPos - 1, 6, msgEncoded);
+          }
+          else
+            blocks[2].replace(insPos - 1, 6, reinterpret_cast<const char*>(session_id_.ptr), session_id_.length);
+        }
+        else
+        {
+          Log(SSD_HOST::LL_ERROR, "Unsupported License request template (body)");
+          goto SSMFAIL;
+        }
       }
     }
     std::string decoded = b64_encode(reinterpret_cast<const unsigned char*>(blocks[2].data()), blocks[2].size(), false);
