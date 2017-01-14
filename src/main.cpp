@@ -832,6 +832,11 @@ protected:
           AP4_TencAtom* tenc(AP4_DYNAMIC_CAST(AP4_TencAtom, schi->GetChild(AP4_ATOM_TYPE_TENC, 0)));
           if (tenc)
             m_DefaultKey = tenc->GetDefaultKid();
+          else
+          {
+			  static const uint8_t kid[16] = {0,0,0,0,3,247,30,79,0,0,0,0,0,0,0,0};
+			  m_DefaultKey = kid;
+          }
         }
 
         if (AP4_FAILED(result = AP4_CencSampleDecrypter::Create(sample_table, algorithm_id, 0, 0, 0, m_SingleSampleDecryptor, m_Decrypter)))
