@@ -173,6 +173,8 @@ class CdmAdapter : NON_EXPORTED_BASE(public cdm::Host_8)
 	unsigned int GetMessageSize()const { return static_cast<unsigned int>(message_.size()); };
 	const uint8_t * GetKeyId()const{ return reinterpret_cast<const uint8_t*>(usable_key_id_.data()); };
 	unsigned int GetKeyIdSize()const { return static_cast<unsigned int>(usable_key_id_.size()); };
+	const uint8_t * GetSessionId()const { return reinterpret_cast<const uint8_t*>(session_id_.data()); };
+	unsigned int GetSessionIdSize()const { return static_cast<unsigned int>(session_id_.size()); };
 private:
   virtual void Initialize(const std::string& cdm_path);
 
