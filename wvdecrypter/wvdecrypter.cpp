@@ -342,9 +342,9 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       std::string::size_type sidSearchPos(insPos);
       if (insPos >= 0)
       {
-        if (blocks[2][insPos - 1] == 'B')
+        if (blocks[2][insPos - 1] == 'B' || blocks[2][insPos - 1] == 'b')
         {
-          std::string msgEncoded = b64_encode(wv_adapter->GetMessage(), wv_adapter->GetMessageSize(), false);
+          std::string msgEncoded = b64_encode(wv_adapter->GetMessage(), wv_adapter->GetMessageSize(), blocks[2][insPos - 1] == 'B');
           blocks[2].replace(insPos - 1, 6, msgEncoded);
           sidSearchPos += msgEncoded.size();
         }
@@ -365,9 +365,9 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       {
         if (insPos >= 0)
         {
-          if (blocks[2][insPos - 1] == 'B')
+          if (blocks[2][insPos - 1] == 'B' || blocks[2][insPos - 1] == 'b')
           {
-            std::string msgEncoded = b64_encode(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize(), false);
+            std::string msgEncoded = b64_encode(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize(), blocks[2][insPos - 1] == 'B');
             blocks[2].replace(insPos - 1, 6, msgEncoded);
           }
           else
