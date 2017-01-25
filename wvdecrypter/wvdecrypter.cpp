@@ -214,6 +214,9 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
     return;
   }
 
+  if (serverCertificate.GetDataSize())
+    wv_adapter->SetServerCertificate(0, serverCertificate.GetData(), serverCertificate.GetDataSize());
+
   // For backward compatibility: If no | is found in URL, make the amazon convention out of it
   if (license_url_.find('|') == std::string::npos)
     license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=false|JBlicense";
