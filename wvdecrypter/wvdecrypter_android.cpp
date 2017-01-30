@@ -516,13 +516,22 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       return AP4_ERROR_NOT_SUPPORTED;
     }
 
+    AP4_UI16 dummyClear(0);
+    AP4_UI32 dummyCipher(data_in.GetDataSize());
+    if (!subsample_count)
+    {
+      subsample_count = 1;
+      bytes_of_cleartext_data = &dummyClear;
+      bytes_of_encrypted_data = &dummyCipher;
+    }
+
     data_out.SetData(reinterpret_cast<const AP4_Byte*>(&subsample_count), sizeof(subsample_count));
     data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
     data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
     data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
     data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
 
-    if (nal_length_size_ && subsample_count)
+    if (nal_length_size_ && bytes_of_cleartext_data[0] > 0)
     {
       //Note that we assume that there is enough data in data_out to hold everything without reallocating.
 
