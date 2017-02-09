@@ -26,6 +26,8 @@
 #include <chrono>
 #include <thread>
 
+using namespace SSD;
+
 SSD_HOST *host = 0;
 
 static void Log(SSD_HOST::LOGLEVEL loglevel, const char *format, ...)
@@ -587,7 +589,7 @@ class WVDecrypter : public SSD_DECRYPTER
 {
 public:
   // Return supported URN if type matches to capabikitues, otherwise null
-  const char *Supported(const char* licenseType, const char *licenseKey) override
+  virtual const char *Supported(const char* licenseType, const char *licenseKey) override
   {
     licenseKey_ = licenseKey;
     if (strcmp(licenseType, "com.widevine.alpha") == 0)
@@ -595,7 +597,7 @@ public:
     return 0;
   };
 
-  AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec, AP4_DataBuffer &serverCertificate) override
+  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec, AP4_DataBuffer &serverCertificate) override
   {
     AP4_CencSingleSampleDecrypter *res = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
     if (!((WV_CencSingleSampleDecrypter*)res)->initialized())
@@ -605,9 +607,19 @@ public:
     }
     return res;
   }
+  
+  virtual bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData)
+  {
+    return false;
+  }
+
+  virtual SSD_DECODE_RETVAL DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture)
+  {
+    return VC_ERROR;
+  }
 private:
   std::string licenseKey_;
-} decrypter;
+};
 
 extern "C" {
 
@@ -622,7 +634,11 @@ extern "C" {
     if (host_version != SSD_HOST::version)
       return 0;
     host = h;
-    return &decrypter;
+    return new WVDecrypter;
   };
 
+  void MODULE_API DeleteDecryptorInstance(class SSD_DECRYPTER *d)
+  {
+    delete d;
+  }
 };
