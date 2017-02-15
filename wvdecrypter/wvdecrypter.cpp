@@ -96,6 +96,120 @@ private:
 };
 
 /*----------------------------------------------------------------------
+|   CdmVideoDecoder implementation
++---------------------------------------------------------------------*/
+
+class CdmFixedBuffer : public cdm::Buffer {
+public:
+  CdmFixedBuffer() : data_(nullptr), dataSize_(0), capacity_(0) {};
+  virtual ~CdmFixedBuffer() {};
+
+  virtual void Destroy() override {};
+
+  virtual uint32_t Capacity() const override
+  {
+    return capacity_;
+  };
+  virtual uint8_t* Data() override
+  {
+    return data_;
+  };
+  virtual void SetSize(uint32_t size) override
+  {
+    dataSize_ = size;
+  };
+  virtual uint32_t Size() const override
+  {
+    return dataSize_;
+  };
+
+  void initialize(uint8_t* data, size_t dataSize)
+  {
+    data_ = data;
+    dataSize_ = 0;
+    capacity_ = dataSize;
+  }
+
+private:
+  uint8_t *data_;
+  size_t dataSize_, capacity_;
+};
+
+class CdmVideoFrame : public cdm::VideoFrame {
+public:
+  CdmVideoFrame() :m_buffer(0) {};
+
+  virtual void SetFormat(cdm::VideoFormat format) override
+  {
+    m_format = format;
+  }
+
+  virtual cdm::VideoFormat Format() const override
+  {
+    return m_format;
+  }
+
+  virtual void SetSize(cdm::Size size) override
+  {
+    m_size = size;
+  }
+
+  virtual cdm::Size Size() const override
+  {
+    return m_size;
+  }
+
+  virtual void SetFrameBuffer(cdm::Buffer* frame_buffer) override
+  {
+    m_buffer = frame_buffer;
+  }
+
+  virtual cdm::Buffer* FrameBuffer() override
+  {
+    return m_buffer;
+  }
+
+  virtual void SetPlaneOffset(VideoPlane plane, uint32_t offset) override
+  {
+    m_planeOffsets[plane] = offset;
+  }
+
+  virtual uint32_t PlaneOffset(VideoPlane plane) override
+  {
+    return m_planeOffsets[plane];
+  }
+
+  virtual void SetStride(VideoPlane plane, uint32_t stride) override
+  {
+    m_stride[plane] = stride;
+  }
+
+  virtual uint32_t Stride(VideoPlane plane) override
+  {
+    return m_stride[plane];
+  }
+
+  virtual void SetTimestamp(int64_t timestamp) override
+  {
+    m_pts = timestamp;
+  }
+
+  virtual int64_t Timestamp() const override
+  {
+    return m_pts;
+  }
+private:
+  cdm::VideoFormat m_format;
+  cdm::Buffer *m_buffer;
+  cdm::Size m_size;
+
+  uint32_t m_planeOffsets[cdm::VideoFrame::kMaxPlanes];
+  uint32_t m_stride[cdm::VideoFrame::kMaxPlanes];
+
+  uint64_t m_pts;
+};
+
+/*----------------------------------------------------------------------
 |   WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
 class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter, public media::CdmAdapterClient
@@ -103,6 +217,7 @@ class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter, publi
 public:
   // methods
   WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &pssh, AP4_DataBuffer &serverCertificate);
+  uint32_t GetCapabilities();
 
   bool initialized()const { return wv_adapter != 0; };
 
@@ -112,7 +227,7 @@ public:
     messages_.push_back(msg);
   };
 
-  virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size)override;
+  virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)override;
 
   virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
     AP4_DataBuffer& data_out,
@@ -129,6 +244,9 @@ public:
     // array of <subsample_count> integers. NULL if subsample_count is 0
     const AP4_UI32* bytes_of_encrypted_data);
 
+  bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData);
+  SSD_DECODE_RETVAL DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture);
+
 private:
   bool GetLicense();
   bool SendSessionMessage();
@@ -141,6 +259,11 @@ private:
   AP4_UI16 key_size_;
   const AP4_UI08 *key_;
   AP4_UI08 nal_length_size_;
+  AP4_DataBuffer annexb_sps_pps_;
+  uint32_t decrypter_caps_;
+
+  CdmFixedBuffer frameBuffer_;
+  CdmVideoFrame videoFrame_;
 };
 
 /*----------------------------------------------------------------------
@@ -157,6 +280,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   , key_size_(0)
   , key_(0)
   , nal_length_size_(0)
+  , decrypter_caps_(0)
 {
   if (pssh.GetDataSize() > 256)
   {
@@ -229,6 +353,12 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
     wv_adapter = 0;
   }
   SetParentIsOwner(false);
+}
+
+uint32_t WV_CencSingleSampleDecrypter::GetCapabilities()
+{
+  decrypter_caps_ = SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_SUPPORTS_DECODING;
+  return decrypter_caps_;
 }
 
 bool WV_CencSingleSampleDecrypter::GetLicense()
@@ -467,11 +597,13 @@ SSMFAIL:
 |   WV_CencSingleSampleDecrypter::SetKeyId
 +---------------------------------------------------------------------*/
 
-AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size)
+AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)
 {
   key_size_ = key_size;
   key_ = key;
   nal_length_size_ = nal_length_size;
+  annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
+
   return AP4_SUCCESS;
 }
 
@@ -487,14 +619,125 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
   const AP4_UI16* bytes_of_cleartext_data,
   const AP4_UI32* bytes_of_encrypted_data)
 {
-  // the output has the same size as the input
-  data_out.SetDataSize(data_in.GetDataSize());
-
   if (!wv_adapter)
   {
     data_out.SetData(data_in.GetData(), data_in.GetDataSize());
     return AP4_SUCCESS;
   }
+
+  if (data_in.GetDataSize() == 0)
+  {
+    data_out.SetData(reinterpret_cast<const AP4_Byte*>("CRYPTO"), 6);
+    uint16_t cryptosize = 6 + 2 + (1 + wv_adapter->GetSessionIdSize()) + 16;
+    data_out.AppendData(reinterpret_cast<const AP4_Byte*>(&cryptosize), sizeof(cryptosize));
+    uint8_t dummy(wv_adapter->GetSessionIdSize());
+    data_out.AppendData(&dummy, 1);
+    data_out.AppendData(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize());
+    uint8_t keysystem[16] = { 0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed };
+    data_out.AppendData(keysystem, 16);
+    return AP4_SUCCESS;
+  }
+  else if(decrypter_caps_ & SSD_DECRYPTER::SSD_SECURE_PATH) //we can not decrypt only
+  {
+    if (nal_length_size_ > 4)
+    {
+      Log(SSD_HOST::LL_ERROR, "Nalu length size > 4 not supported");
+      return AP4_ERROR_NOT_SUPPORTED;
+    }
+
+    AP4_UI16 dummyClear(0);
+    AP4_UI32 dummyCipher(data_in.GetDataSize());
+
+    if (iv)
+    {
+      if (!subsample_count)
+      {
+        subsample_count = 1;
+        bytes_of_cleartext_data = &dummyClear;
+        bytes_of_encrypted_data = &dummyCipher;
+      }
+
+      data_out.SetData(reinterpret_cast<const AP4_Byte*>(&subsample_count), sizeof(subsample_count));
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
+    }
+    else
+    {
+      data_out.SetDataSize(0);
+      bytes_of_cleartext_data = &dummyClear;
+      bytes_of_encrypted_data = &dummyCipher;
+    }
+
+    if (nal_length_size_ && (!iv || bytes_of_cleartext_data[0] > 0))
+    {
+      //Note that we assume that there is enough data in data_out to hold everything without reallocating.
+
+      //check NAL / subsample
+      const AP4_Byte *packet_in(data_in.GetData()), *packet_in_e(data_in.GetData() + data_in.GetDataSize());
+      AP4_Byte *packet_out(data_out.UseData() + data_out.GetDataSize());
+      AP4_UI16 *clrb_out(iv ? reinterpret_cast<AP4_UI16*>(data_out.UseData() + sizeof(subsample_count)):nullptr);
+      unsigned int nalunitcount(0), nalunitsum(0), configSize(0);
+
+      while (packet_in < packet_in_e)
+      {
+        uint32_t nalsize(0);
+        for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
+
+        //look if we have to inject sps / pps
+        if (annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
+        {
+          memcpy(packet_out, annexb_sps_pps_.GetData(), annexb_sps_pps_.GetDataSize());
+          packet_out += annexb_sps_pps_.GetDataSize();
+          if(clrb_out) *clrb_out += annexb_sps_pps_.GetDataSize();
+          configSize = annexb_sps_pps_.GetDataSize();
+          annexb_sps_pps_.SetDataSize(0);
+        }
+
+        //Anex-B Start pos
+        packet_out[0] = packet_out[1] = packet_out[2] = 0; packet_out[3] = 1;
+        packet_out += 4;
+        memcpy(packet_out, packet_in, nalsize);
+        packet_in += nalsize;
+        packet_out += nalsize;
+        if (clrb_out) *clrb_out += (4 - nal_length_size_);
+        ++nalunitcount;
+
+        if (nalsize + nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        {
+          Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", nal_length_size_, nalsize + nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
+          return AP4_ERROR_NOT_SUPPORTED;
+        }
+        else if (!iv)
+        {
+          nalunitsum = 0;
+        }
+        else if (nalsize + nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        {
+          ++bytes_of_cleartext_data;
+          ++bytes_of_encrypted_data;
+          ++clrb_out;
+          --subsample_count;
+          nalunitsum = 0;
+        }
+        else
+          nalunitsum += nalsize + nal_length_size_;
+      }
+      if (packet_in != packet_in_e || subsample_count)
+      {
+        Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
+        return AP4_ERROR_NOT_SUPPORTED;
+      }
+      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - nal_length_size_) * nalunitcount);
+    }
+    else
+      data_out.AppendData(data_in.GetData(), data_in.GetDataSize());
+    return AP4_SUCCESS;
+  }
+
+  // the output has the same size as the input
+  data_out.SetDataSize(data_in.GetDataSize());
 
   // check input parameters
   if (iv == NULL) return AP4_ERROR_INVALID_PARAMETERS;
@@ -544,9 +787,112 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
   return (ret == cdm::Status::kSuccess) ? AP4_SUCCESS : AP4_ERROR_INVALID_PARAMETERS;
 }
 
+bool WV_CencSingleSampleDecrypter::OpenVideoDecoder(const SSD_VIDEOINITDATA *initData)
+{
+  cdm::VideoDecoderConfig vconfig;
+  vconfig.codec = static_cast<cdm::VideoDecoderConfig::VideoCodec>(initData->codec);
+  vconfig.coded_size.width = initData->width;
+  vconfig.coded_size.height = initData->height;
+  vconfig.extra_data = 0;// const_cast<uint8_t*>(initData->extraData);
+  vconfig.extra_data_size = 0;// initData->extraDataSize;
+  vconfig.format = static_cast<cdm::VideoFormat> (initData->videoFormats[0]);
+  vconfig.profile = static_cast<cdm::VideoDecoderConfig::VideoCodecProfile>(initData->codecProfile);
+
+  cdm::Status ret = wv_adapter->InitializeVideoDecoder(vconfig);
+
+  Log(SSD_HOST::LL_ERROR, "WVDecoder initialization returned status %i", ret);
+
+  return ret == cdm::Status::kSuccess;
+}
+
+SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture)
+{
+  if (sample)
+  {
+    // if we have an picture waiting, or not yet get the dest buffer, do nothing
+    if (videoFrame_.FrameBuffer() || !frameBuffer_.Data())
+      return VC_ERROR;
+
+    cdm::InputBuffer cdm_in;
+
+    if (sample->numSubSamples) {
+      if (sample->clearBytes == NULL || sample->cipherBytes == NULL) {
+        return VC_ERROR;
+      }
+    }
+
+    // transform ap4 format into cmd format
+    if (sample->numSubSamples > max_subsample_count_)
+    {
+      subsample_buffer_ = (cdm::SubsampleEntry*)realloc(subsample_buffer_, sample->numSubSamples * sizeof(cdm::SubsampleEntry));
+      max_subsample_count_ = sample->numSubSamples;
+    }
+    cdm_in.num_subsamples = sample->numSubSamples;
+    cdm_in.subsamples = subsample_buffer_;
+
+    const uint16_t *clearBytes(sample->clearBytes);
+    const uint32_t *cipherBytes(sample->cipherBytes);
+
+    for (cdm::SubsampleEntry *b(subsample_buffer_), *e(subsample_buffer_ + sample->numSubSamples); b != e; ++b, ++clearBytes, ++cipherBytes)
+    {
+      b->clear_bytes = *clearBytes;
+      b->cipher_bytes = *cipherBytes;
+    }
+    cdm_in.data = sample->data;
+    cdm_in.data_size = sample->dataSize;
+    cdm_in.iv = sample->iv;
+    cdm_in.iv_size = sample->iv ? 16 : 0;
+    cdm_in.timestamp = sample->pts;
+
+    uint8_t unencryptedKID = 0x31;
+    cdm_in.key_id = sample->kid ? sample->kid : &unencryptedKID;
+    cdm_in.key_id_size = sample->kid ? 16 : 1;
+
+    videoFrame_.SetFrameBuffer(&frameBuffer_);
+    cdm::Status ret = wv_adapter->DecryptAndDecodeFrame(cdm_in, &videoFrame_);
+
+    if (ret != cdm::Status::kSuccess)
+      videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
+
+    if (ret == cdm::Status::kSuccess || ret == cdm::Status::kNeedMoreData)
+      return VC_NONE;
+    else
+      return VC_ERROR;
+  }
+  else if (picture)
+  {
+    if (videoFrame_.FrameBuffer())
+    {
+      picture->width = videoFrame_.Size().width;
+      picture->height = videoFrame_.Size().height;
+      picture->pts = videoFrame_.Timestamp();
+      for (unsigned int i(0); i < cdm::VideoFrame::kMaxPlanes; ++i)
+      {
+        picture->planeOffsets[i] = videoFrame_.PlaneOffset(static_cast<cdm::VideoFrame::VideoPlane>(i));
+        picture->stride[i] = videoFrame_.Stride(static_cast<cdm::VideoFrame::VideoPlane>(i));
+      }
+      picture->videoFormat = static_cast<SSD::SSD_VIDEOFORMAT>(videoFrame_.Format());
+      videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
+
+      return VC_PICTURE;
+    }
+    else
+    {
+      frameBuffer_.initialize(picture->decodedData, picture->decodedDataSize);
+      return VC_BUFFER;
+    }
+  }
+  else
+    return VC_ERROR;
+}
+
+/*********************************************************************************************/
+
 class WVDecrypter: public SSD_DECRYPTER
 {
 public:
+  WVDecrypter() :decrypter_(nullptr) {};
+
   // Return supported URN if type matches to capabikitues, otherwise null
   virtual const char *Supported(const char* licenseType, const char *licenseKey) override
   {
@@ -558,27 +904,42 @@ public:
 
   virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec, AP4_DataBuffer &serverCertificate) override
   {
-    AP4_CencSingleSampleDecrypter *res = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
-    if (!((WV_CencSingleSampleDecrypter*)res)->initialized())
+    decrypter_ = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
+    if (!decrypter_->initialized())
     {
-      delete res;
-      res = 0;
+      delete decrypter_;
+      decrypter_ = 0;
     }
-    return res;
+    return decrypter_;
+  }
+
+  virtual uint32_t GetCapabilities()
+  {
+    if (!decrypter_)
+      return 0;
+
+    return decrypter_->GetCapabilities();
   }
 
   virtual bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData)
   {
-    return false;
+    if (!decrypter_ || !initData)
+      return false;
+
+    return decrypter_->OpenVideoDecoder(initData);
   }
 
   virtual SSD_DECODE_RETVAL DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture)
   {
-    return VC_ERROR;
+    if (!decrypter_)
+      return VC_ERROR;
+
+    return decrypter_->DecodeVideo(sample, picture);
   }
 
 private:
   std::string licenseKey_;
+  WV_CencSingleSampleDecrypter *decrypter_;
 };
 
 extern "C" {
@@ -589,7 +950,7 @@ extern "C" {
 #define MODULE_API
 #endif
 
-  class SSD_DECRYPTER MODULE_API *CreateDecryptorInstance(class SSD_HOST *h, uint32_t host_version)
+  SSD_DECRYPTER MODULE_API *CreateDecryptorInstance(class SSD_HOST *h, uint32_t host_version)
   {
     if (host_version != SSD_HOST::version)
       return 0;
@@ -597,7 +958,7 @@ extern "C" {
     return new WVDecrypter();
   };
 
-  void MODULE_API DeleteDecryptorInstance(class SSD_DECRYPTER *d)
+  void MODULE_API DeleteDecryptorInstance(SSD_DECRYPTER *d)
   {
     delete d;
   }

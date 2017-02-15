@@ -248,7 +248,10 @@ void CdmAdapter::ResetDecoder(cdm::StreamType decoder_type)
 cdm::Status CdmAdapter::DecryptAndDecodeFrame(const cdm::InputBuffer& encrypted_buffer,
 	cdm::VideoFrame* video_frame)
 {
-	return cdm_->DecryptAndDecodeFrame(encrypted_buffer, video_frame);
+  active_buffer_ = video_frame->FrameBuffer();
+  cdm::Status ret = cdm_->DecryptAndDecodeFrame(encrypted_buffer, video_frame);
+  active_buffer_ = 0;
+  return ret;
 }
 
 cdm::Status CdmAdapter::DecryptAndDecodeSamples(const cdm::InputBuffer& encrypted_buffer,

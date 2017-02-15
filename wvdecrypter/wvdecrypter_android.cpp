@@ -56,7 +56,7 @@ public:
 
   bool initialized()const { return media_drm_ != 0; };
 
-  virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size) override;
+  virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps) override;
 
   virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
     AP4_DataBuffer& data_out,
@@ -87,6 +87,7 @@ private:
   AP4_UI16 key_size_;
   uint8_t key_[32];
   AP4_UI08 nal_length_size_;
+  AP4_DataBuffer annexb_sps_pps_;
 };
 
 bool needProvision = false;
@@ -474,7 +475,7 @@ SSMFAIL:
 |   WV_CencSingleSampleDecrypter::SetKeyId
 +---------------------------------------------------------------------*/
 
-AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size)
+AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)
 {
   if (key_size > 32)
     return AP4_ERROR_INVALID_PARAMETERS;
@@ -482,6 +483,9 @@ AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI16 key_size, c
   key_size_ = key_size;
   memcpy(key_, key, key_size);
   nal_length_size_ = nal_length_size;
+
+  annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
+
   return AP4_SUCCESS;
 }
 
@@ -520,33 +524,53 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
 
     AP4_UI16 dummyClear(0);
     AP4_UI32 dummyCipher(data_in.GetDataSize());
-    if (!subsample_count)
+
+    if (iv)
     {
-      subsample_count = 1;
+      if (!subsample_count)
+      {
+        subsample_count = 1;
+        bytes_of_cleartext_data = &dummyClear;
+        bytes_of_encrypted_data = &dummyCipher;
+      }
+
+      data_out.SetData(reinterpret_cast<const AP4_Byte*>(&subsample_count), sizeof(subsample_count));
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
+    }
+    else
+    {
+      data_out.SetDataSize(0);
       bytes_of_cleartext_data = &dummyClear;
       bytes_of_encrypted_data = &dummyCipher;
     }
 
-    data_out.SetData(reinterpret_cast<const AP4_Byte*>(&subsample_count), sizeof(subsample_count));
-    data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
-    data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
-    data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
-    data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
-
-    if (nal_length_size_ && bytes_of_cleartext_data[0] > 0)
+    if (nal_length_size_ && (!iv || bytes_of_cleartext_data[0] > 0))
     {
       //Note that we assume that there is enough data in data_out to hold everything without reallocating.
 
       //check NAL / subsample
       const AP4_Byte *packet_in(data_in.GetData()), *packet_in_e(data_in.GetData() + data_in.GetDataSize());
       AP4_Byte *packet_out(data_out.UseData() + data_out.GetDataSize());
-      AP4_UI16 *clrb_out(reinterpret_cast<AP4_UI16*>(data_out.UseData() + sizeof(subsample_count)));
-      unsigned int nalunitcount(0), nalunitsum(0);
+      AP4_UI16 *clrb_out(iv ? reinterpret_cast<AP4_UI16*>(data_out.UseData() + sizeof(subsample_count)) : nullptr);
+      unsigned int nalunitcount(0), nalunitsum(0), configSize(0);
 
-      while (packet_in < packet_in_e && subsample_count)
+      while (packet_in < packet_in_e)
       {
         uint32_t nalsize(0);
         for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
+
+        //look if we have to inject sps / pps
+        if (annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
+        {
+          memcpy(packet_out, annexb_sps_pps_.GetData(), annexb_sps_pps_.GetDataSize());
+          packet_out += annexb_sps_pps_.GetDataSize();
+          if (clrb_out) *clrb_out += annexb_sps_pps_.GetDataSize();
+          configSize = annexb_sps_pps_.GetDataSize();
+          annexb_sps_pps_.SetDataSize(0);
+        }
 
         //Anex-B Start pos
         packet_out[0] = packet_out[1] = packet_out[2] = 0; packet_out[3] = 1;
@@ -554,13 +578,17 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
         memcpy(packet_out, packet_in, nalsize);
         packet_in += nalsize;
         packet_out += nalsize;
-        *clrb_out += (4 - nal_length_size_);
+        if (clrb_out) *clrb_out += (4 - nal_length_size_);
         ++nalunitcount;
 
         if (nalsize + nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
         {
           Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", nal_length_size_, nalsize + nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
           return AP4_ERROR_NOT_SUPPORTED;
+        }
+        else if (!iv)
+        {
+          nalunitsum = 0;
         }
         else if (nalsize + nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
         {
@@ -578,8 +606,9 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
         Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
         return AP4_ERROR_NOT_SUPPORTED;
       }
-      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + (4 - nal_length_size_) * nalunitcount);
-    }else
+      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - nal_length_size_) * nalunitcount);
+    }
+    else
       data_out.AppendData(data_in.GetData(), data_in.GetDataSize());
   }
   return AP4_SUCCESS;
@@ -588,6 +617,8 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
 class WVDecrypter : public SSD_DECRYPTER
 {
 public:
+  WVDecrypter() :decrypter_(nullptr) {};
+
   // Return supported URN if type matches to capabikitues, otherwise null
   virtual const char *Supported(const char* licenseType, const char *licenseKey) override
   {
@@ -599,15 +630,23 @@ public:
 
   virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec, AP4_DataBuffer &serverCertificate) override
   {
-    AP4_CencSingleSampleDecrypter *res = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
-    if (!((WV_CencSingleSampleDecrypter*)res)->initialized())
+    decrypter_ = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
+    if (!decrypter_->initialized())
     {
-      delete res;
-      res = 0;
+      delete decrypter_;
+      decrypter_ = 0;
     }
-    return res;
+    return decrypter_;
   }
   
+  virtual uint32_t GetCapabilities()
+  {
+    if (!decrypter_)
+      return 0;
+
+    return decrypter_->GetCapabilities();
+  }
+
   virtual bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData)
   {
     return false;
@@ -619,6 +658,7 @@ public:
   }
 private:
   std::string licenseKey_;
+  WV_CencSingleSampleDecrypter *decrypter_;
 };
 
 extern "C" {
@@ -629,7 +669,7 @@ extern "C" {
 #define MODULE_API
 #endif
 
-  class SSD_DECRYPTER MODULE_API *CreateDecryptorInstance(class SSD_HOST *h, uint32_t host_version)
+  SSD_DECRYPTER MODULE_API *CreateDecryptorInstance(class SSD_HOST *h, uint32_t host_version)
   {
     if (host_version != SSD_HOST::version)
       return 0;
