@@ -28,6 +28,7 @@ public:
     kLegacySessionError
   };
   virtual void OnCDMMessage(CDMADPMSG msg) = 0;
+  virtual cdm::Buffer *AllocateBuffer(size_t sz) = 0;
 };
 
 class CdmAdapter : NON_EXPORTED_BASE(public cdm::Host_8)

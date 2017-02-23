@@ -227,6 +227,19 @@ public:
     messages_.push_back(msg);
   };
 
+  virtual cdm::Buffer *AllocateBuffer(size_t sz) override
+  {
+    SSD_PICTURE pic;
+    pic.decodedDataSize = sz;
+    if (host->GetBuffer(host_instance_, pic))
+    {
+      CdmFixedBuffer *buf = new CdmFixedBuffer;
+      buf->initialize(pic.decodedData, pic.decodedDataSize);
+      return buf;
+    }
+    return nullptr;
+  };
+
   virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)override;
 
   virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
@@ -245,7 +258,8 @@ public:
     const AP4_UI32* bytes_of_encrypted_data);
 
   bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData);
-  SSD_DECODE_RETVAL DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture);
+  SSD_DECODE_RETVAL DecodeVideo(void* hostInstance, SSD_SAMPLE *sample, SSD_PICTURE *picture);
+  void ResetVideo();
 
 private:
   bool GetLicense();
@@ -261,8 +275,8 @@ private:
   AP4_UI08 nal_length_size_;
   AP4_DataBuffer annexb_sps_pps_;
   uint32_t decrypter_caps_;
+  void *host_instance_;
 
-  CdmFixedBuffer frameBuffer_;
   CdmVideoFrame videoFrame_;
 };
 
@@ -281,6 +295,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   , key_(0)
   , nal_length_size_(0)
   , decrypter_caps_(0)
+  , host_instance_(0)
 {
   if (pssh.GetDataSize() > 256)
   {
@@ -344,7 +359,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
 
   // For backward compatibility: If no | is found in URL, make the amazon convention out of it
   if (license_url_.find('|') == std::string::npos)
-    license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=false|JBlicense";
+    license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=true|JBlicense";
 
   if (!GetLicense())
   {
@@ -352,6 +367,8 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
     delete wv_adapter;
     wv_adapter = 0;
   }
+  else
+    wv_adapter->QueryOutputProtectionStatus();
   SetParentIsOwner(false);
 }
 
@@ -661,7 +678,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
-      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(wv_adapter->GetKeyId()/*key_*/), 16);
     }
     else
     {
@@ -805,12 +822,12 @@ bool WV_CencSingleSampleDecrypter::OpenVideoDecoder(const SSD_VIDEOINITDATA *ini
   return ret == cdm::Status::kSuccess;
 }
 
-SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture)
+SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, SSD_SAMPLE *sample, SSD_PICTURE *picture)
 {
   if (sample)
   {
     // if we have an picture waiting, or not yet get the dest buffer, do nothing
-    if (videoFrame_.FrameBuffer() || !frameBuffer_.Data())
+    if (videoFrame_.FrameBuffer())
       return VC_ERROR;
 
     cdm::InputBuffer cdm_in;
@@ -848,11 +865,10 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(SSD_SAMPLE *sample, 
     cdm_in.key_id = sample->kid ? sample->kid : &unencryptedKID;
     cdm_in.key_id_size = sample->kid ? 16 : 1;
 
-    videoFrame_.SetFrameBuffer(&frameBuffer_);
+    //DecryptAndDecode calls Alloc wich cals kodi VideoCodec. Set instance handle.
+    host_instance_ = hostInstance;
     cdm::Status ret = wv_adapter->DecryptAndDecodeFrame(cdm_in, &videoFrame_);
-
-    if (ret != cdm::Status::kSuccess)
-      videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
+    host_instance_ = nullptr;
 
     if (ret == cdm::Status::kSuccess || ret == cdm::Status::kNeedMoreData)
       return VC_NONE;
@@ -866,6 +882,9 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(SSD_SAMPLE *sample, 
       picture->width = videoFrame_.Size().width;
       picture->height = videoFrame_.Size().height;
       picture->pts = videoFrame_.Timestamp();
+      picture->decodedData = videoFrame_.FrameBuffer()->Data();
+      picture->decodedDataSize = videoFrame_.FrameBuffer()->Size();
+
       for (unsigned int i(0); i < cdm::VideoFrame::kMaxPlanes; ++i)
       {
         picture->planeOffsets[i] = videoFrame_.PlaneOffset(static_cast<cdm::VideoFrame::VideoPlane>(i));
@@ -874,17 +893,22 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(SSD_SAMPLE *sample, 
       picture->videoFormat = static_cast<SSD::SSD_VIDEOFORMAT>(videoFrame_.Format());
       videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
 
+      delete (CdmFixedBuffer*)(videoFrame_.FrameBuffer());
+
       return VC_PICTURE;
     }
     else
-    {
-      frameBuffer_.initialize(picture->decodedData, picture->decodedDataSize);
       return VC_BUFFER;
-    }
   }
   else
     return VC_ERROR;
 }
+
+void WV_CencSingleSampleDecrypter::ResetVideo()
+{
+  wv_adapter->ResetDecoder(cdm::kStreamTypeVideo);
+}
+
 
 /*********************************************************************************************/
 
@@ -929,12 +953,18 @@ public:
     return decrypter_->OpenVideoDecoder(initData);
   }
 
-  virtual SSD_DECODE_RETVAL DecodeVideo(SSD_SAMPLE *sample, SSD_PICTURE *picture)
+  virtual SSD_DECODE_RETVAL DecodeVideo(void* hostInstance, SSD_SAMPLE *sample, SSD_PICTURE *picture) override
   {
     if (!decrypter_)
       return VC_ERROR;
 
-    return decrypter_->DecodeVideo(sample, picture);
+    return decrypter_->DecodeVideo(hostInstance, sample, picture);
+  }
+
+  virtual void ResetVideo() override
+  {
+    if (decrypter_)
+      decrypter_->ResetVideo();
   }
 
 private:

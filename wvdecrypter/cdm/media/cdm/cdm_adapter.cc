@@ -248,10 +248,7 @@ void CdmAdapter::ResetDecoder(cdm::StreamType decoder_type)
 cdm::Status CdmAdapter::DecryptAndDecodeFrame(const cdm::InputBuffer& encrypted_buffer,
 	cdm::VideoFrame* video_frame)
 {
-  active_buffer_ = video_frame->FrameBuffer();
-  cdm::Status ret = cdm_->DecryptAndDecodeFrame(encrypted_buffer, video_frame);
-  active_buffer_ = 0;
-  return ret;
+  return cdm_->DecryptAndDecodeFrame(encrypted_buffer, video_frame);
 }
 
 cdm::Status CdmAdapter::DecryptAndDecodeSamples(const cdm::InputBuffer& encrypted_buffer,
@@ -278,7 +275,10 @@ void CdmAdapter::OnQueryOutputProtectionStatus(cdm::QueryResult result,
 
 cdm::Buffer* CdmAdapter::Allocate(uint32_t capacity)
 {
-	return active_buffer_;
+  if (active_buffer_)
+    return active_buffer_;
+  else
+    return client_.AllocateBuffer(capacity);
 }
 
 void CdmAdapter::SetTimer(int64_t delay_ms, void* context)
@@ -379,7 +379,7 @@ void CdmAdapter::EnableOutputProtection(uint32_t desired_protection_mask)
 
 void CdmAdapter::QueryOutputProtectionStatus()
 {
-	cdm_->OnQueryOutputProtectionStatus(cdm::kQuerySucceeded, cdm::kLinkTypeInternal, cdm::kProtectionHDCP);
+	cdm_->OnQueryOutputProtectionStatus(cdm::kQuerySucceeded, 0xFF, cdm::kProtectionHDCP);
 }
 
 void CdmAdapter::OnDeferredInitializationDone(cdm::StreamType stream_type,
