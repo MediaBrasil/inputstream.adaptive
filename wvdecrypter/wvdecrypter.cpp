@@ -21,8 +21,10 @@
 #include "../src/SSD_dll.h"
 #include "jsmn.h"
 #include "Ap4.h"
+
 #include <stdarg.h>
 #include <deque>
+#include <list>
 
 #ifndef WIDEVINECDMFILENAME
 #error  "WIDEVINECDMFILENAME must be set"
@@ -277,7 +279,8 @@ private:
   uint32_t decrypter_caps_;
   void *host_instance_;
 
-  CdmVideoFrame videoFrame_;
+  std::list<CdmVideoFrame> videoFrames_;
+
 };
 
 /*----------------------------------------------------------------------
@@ -678,7 +681,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
-      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(wv_adapter->GetKeyId()/*key_*/), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
     }
     else
     {
@@ -816,8 +819,9 @@ bool WV_CencSingleSampleDecrypter::OpenVideoDecoder(const SSD_VIDEOINITDATA *ini
   vconfig.profile = static_cast<cdm::VideoDecoderConfig::VideoCodecProfile>(initData->codecProfile);
 
   cdm::Status ret = wv_adapter->InitializeVideoDecoder(vconfig);
+  videoFrames_.clear();
 
-  Log(SSD_HOST::LL_ERROR, "WVDecoder initialization returned status %i", ret);
+  Log(SSD_HOST::LL_DEBUG, "WVDecoder initialization returned status %i", ret);
 
   return ret == cdm::Status::kSuccess;
 }
@@ -827,7 +831,7 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
   if (sample)
   {
     // if we have an picture waiting, or not yet get the dest buffer, do nothing
-    if (videoFrame_.FrameBuffer())
+    if (videoFrames_.size() == 4)
       return VC_ERROR;
 
     cdm::InputBuffer cdm_in;
@@ -867,18 +871,28 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
 
     //DecryptAndDecode calls Alloc wich cals kodi VideoCodec. Set instance handle.
     host_instance_ = hostInstance;
-    cdm::Status ret = wv_adapter->DecryptAndDecodeFrame(cdm_in, &videoFrame_);
+    CdmVideoFrame frame;
+    cdm::Status ret = wv_adapter->DecryptAndDecodeFrame(cdm_in, &frame);
     host_instance_ = nullptr;
 
-    if (ret == cdm::Status::kSuccess || ret == cdm::Status::kNeedMoreData)
+    if (ret == cdm::Status::kSuccess)
+    {
+      std::list<CdmVideoFrame>::iterator f(videoFrames_.begin());
+      while (f != videoFrames_.end() && f->Timestamp() < frame.Timestamp())++f;
+      videoFrames_.insert(f, frame);
+    }
+
+    if (ret == cdm::Status::kSuccess || (cdm_in.data && ret == cdm::Status::kNeedMoreData))
       return VC_NONE;
     else
       return VC_ERROR;
   }
   else if (picture)
   {
-    if (videoFrame_.FrameBuffer())
+    if (videoFrames_.size() == 4 || (videoFrames_.size() && (picture->flags & SSD_PICTURE::FLAG_DRAIN)))
     {
+      CdmVideoFrame &videoFrame_(videoFrames_.front());
+
       picture->width = videoFrame_.Size().width;
       picture->height = videoFrame_.Size().height;
       picture->pts = videoFrame_.Timestamp();
@@ -894,8 +908,17 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
       videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
 
       delete (CdmFixedBuffer*)(videoFrame_.FrameBuffer());
+      videoFrames_.pop_front();
 
       return VC_PICTURE;
+    }
+    else if ((picture->flags & SSD_PICTURE::FLAG_DRAIN))
+    {
+      static SSD_SAMPLE drainSample = { nullptr,0,0,0,0,nullptr,nullptr,nullptr,nullptr };
+      if (DecodeVideo(hostInstance, &drainSample, nullptr) == VC_ERROR)
+        return VC_EOF;
+      else
+        return VC_NONE;
     }
     else
       return VC_BUFFER;
