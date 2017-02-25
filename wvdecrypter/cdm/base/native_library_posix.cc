@@ -22,7 +22,12 @@ NativeLibrary LoadNativeLibrary(const std::string& library_path,
   // refer to the bug tracker.  Some useful bug reports to read include:
   // http://crbug.com/17943, http://crbug.com/17557, http://crbug.com/36892,
   // and http://crbug.com/40794.
+#ifdef ANDROID
   void* dl = dlopen(library_path.c_str(), RTLD_LAZY);
+#else
+  void* dl = dlopen(library_path.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
+#endif
+
   if (!dl && error)
     error->message = dlerror();
 
