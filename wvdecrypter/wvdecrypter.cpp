@@ -219,6 +219,8 @@ class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter, publi
 public:
   // methods
   WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &pssh, AP4_DataBuffer &serverCertificate);
+  ~WV_CencSingleSampleDecrypter();
+
   uint32_t GetCapabilities();
 
   bool initialized()const { return wv_adapter != 0; };
@@ -373,6 +375,13 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   else
     wv_adapter->QueryOutputProtectionStatus();
   SetParentIsOwner(false);
+}
+
+WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
+{
+  Log(SSD_HOST::LL_DEBUG, "Destroying wv_adapter");
+  delete wv_adapter;
+  wv_adapter = 0;
 }
 
 uint32_t WV_CencSingleSampleDecrypter::GetCapabilities()
@@ -939,6 +948,11 @@ class WVDecrypter: public SSD_DECRYPTER
 {
 public:
   WVDecrypter() :decrypter_(nullptr) {};
+  ~WVDecrypter()
+  {
+    delete decrypter_;
+    decrypter_ = nullptr;
+  };
 
   // Return supported URN if type matches to capabikitues, otherwise null
   virtual const char *Supported(const char* licenseType, const char *licenseKey) override
@@ -1013,6 +1027,6 @@ extern "C" {
 
   void MODULE_API DeleteDecryptorInstance(SSD_DECRYPTER *d)
   {
-    delete d;
+    delete static_cast<WVDecrypter*>(d);
   }
 };

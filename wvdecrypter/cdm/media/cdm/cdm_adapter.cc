@@ -61,6 +61,8 @@ typedef void* (*CreateCdmFunc)(int cdm_interface_version,
 	GetCdmHostFunc get_cdm_host_func,
 	void* user_data);
 
+typedef void (*INITIALIZE_CDM_MODULE_FN)();
+
 }  // namespace
 
 /*******************************         CdmAdapter        ****************************************/
@@ -92,7 +94,12 @@ CdmAdapter::~CdmAdapter()
 		return;
 	cdm_->Destroy();
 	cdm_ = 0;
-	base::UnloadNativeLibrary(library_);
+
+  INITIALIZE_CDM_MODULE_FN deinit_cdm_func = reinterpret_cast<INITIALIZE_CDM_MODULE_FN>(base::GetFunctionPointerFromNativeLibrary(library_, "DeinitializeCdmModule"));
+  if (deinit_cdm_func)
+    deinit_cdm_func();
+
+  base::UnloadNativeLibrary(library_);
 }
 
 void CdmAdapter::Initialize(const std::string& cdm_path)
@@ -110,7 +117,11 @@ void CdmAdapter::Initialize(const std::string& cdm_path)
 	if (!library_)
 		return;
 
-	CreateCdmFunc create_cdm_func = reinterpret_cast<CreateCdmFunc>(base::GetFunctionPointerFromNativeLibrary(library_, "CreateCdmInstance"));
+  INITIALIZE_CDM_MODULE_FN init_cdm_func = reinterpret_cast<INITIALIZE_CDM_MODULE_FN>(base::GetFunctionPointerFromNativeLibrary(library_, "InitializeCdmModule"));
+  if (init_cdm_func)
+    init_cdm_func();
+
+  CreateCdmFunc create_cdm_func = reinterpret_cast<CreateCdmFunc>(base::GetFunctionPointerFromNativeLibrary(library_, "CreateCdmInstance"));
 	if (!create_cdm_func)
 	{
 		base::UnloadNativeLibrary(library_);

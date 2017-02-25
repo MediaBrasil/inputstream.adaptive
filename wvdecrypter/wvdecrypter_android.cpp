@@ -618,6 +618,11 @@ class WVDecrypter : public SSD_DECRYPTER
 {
 public:
   WVDecrypter() :decrypter_(nullptr) {};
+  ~WVDecrypter()
+  {
+    delete decrypter_;
+    decrypter_ = nullptr;
+  };
 
   // Return supported URN if type matches to capabikitues, otherwise null
   virtual const char *Supported(const char* licenseType, const char *licenseKey) override
@@ -679,6 +684,6 @@ extern "C" {
 
   void MODULE_API DeleteDecryptorInstance(class SSD_DECRYPTER *d)
   {
-    delete d;
+    delete static_cast<WVDecrypter*>(d);
   }
 };
