@@ -214,22 +214,56 @@ private:
 /*----------------------------------------------------------------------
 |   WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
+
+struct WVSession
+{
+  std::string session;
+
+  AP4_DataBuffer pssh, challenge;
+
+  struct WVSKEY
+  {
+    std::string keyid;
+    cdm::KeyStatus status;
+  };
+
+  std::vector<WVSKEY> keys;
+};
+
 class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter, public media::CdmAdapterClient
 {
 public:
   // methods
-  WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &pssh, AP4_DataBuffer &serverCertificate);
+  WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &serverCertificate);
   ~WV_CencSingleSampleDecrypter();
 
-  uint32_t GetCapabilities();
+  size_t CreateSession(AP4_DataBuffer &pssh);
+  void CloseSession(size_t sessionhandle);
+  uint32_t GetCapabilities(size_t sessionHandle);
+  const char *GetSessionId(size_t sessionHandle);
 
-  bool initialized()const { return wv_adapter != 0; };
+  bool initialized()const { return wv_adapter != nullptr; };
 
-  virtual void OnCDMMessage(media::CdmAdapterClient::CDMADPMSG msg) override
+  virtual void OnCDMMessage(const char* session, uint32_t session_size, CDMADPMSG msg, const uint8_t *data, size_t data_size, uint32_t status) override
   {
     Log(SSD_HOST::LL_DEBUG, "CDMMessage: %u arrived!", msg);
-    messages_.push_back(msg);
+    if (msg == CDMADPMSG::kSessionMessage)
+    {
+      sessions_.back()->session = std::string(session, session_size);
+      sessions_.back()->challenge.SetData(data, data_size);
+    }
+    else if (msg == CDMADPMSG::kSessionKeysChange)
+    {
+      sessions_.back()->keys.push_back(WVSession::WVSKEY());
+      sessions_.back()->keys.back().keyid = std::string((const char*)data, data_size);
+      sessions_.back()->keys.back().status = static_cast<cdm::KeyStatus>(status);
+    }
   };
+
+  virtual void CDMLog(const char *msg) override
+  {
+    host->Log(SSD_HOST::LOGLEVEL::LL_DEBUG, msg);
+  }
 
   virtual cdm::Buffer *AllocateBuffer(size_t sz) override
   {
@@ -266,20 +300,21 @@ public:
   void ResetVideo();
 
 private:
-  bool GetLicense();
-  bool SendSessionMessage();
+  bool SendSessionMessage(const char* session, uint32_t session_size, const uint8_t *message, uint32_t message_size);
 
-  media::CdmAdapter *wv_adapter;
+  std::shared_ptr<media::CdmAdapter> wv_adapter;
+  std::vector<WVSession*> sessions_;
+
   unsigned int max_subsample_count_;
   cdm::SubsampleEntry *subsample_buffer_;
-  std::deque<media::CdmAdapterClient::CDMADPMSG> messages_;
-  std::string pssh_, license_url_;
+  std::string license_url_;
   AP4_UI16 key_size_;
   const AP4_UI08 *key_;
   AP4_UI08 nal_length_size_;
   AP4_DataBuffer annexb_sps_pps_;
   uint32_t decrypter_caps_;
   void *host_instance_;
+  uint32_t promise_id_;
 
   std::list<CdmVideoFrame> videoFrames_;
 
@@ -289,33 +324,18 @@ private:
 |   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
 
-WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &pssh, AP4_DataBuffer &serverCertificate)
+WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &serverCertificate)
   : AP4_CencSingleSampleDecrypter(0)
-  , wv_adapter(0)
   , max_subsample_count_(0)
   , subsample_buffer_(0)
   , license_url_(licenseURL)
-  , pssh_(std::string(reinterpret_cast<const char*>(pssh.GetData()), pssh.GetDataSize()))
   , key_size_(0)
   , key_(0)
   , nal_length_size_(0)
   , decrypter_caps_(0)
   , host_instance_(0)
+  , promise_id_(0)
 {
-  if (pssh.GetDataSize() > 256)
-  {
-    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
-    return;
-  }
-
-#ifdef _DEBUG
-  std::string strDbg = host->GetProfilePath();
-  strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.init";
-  FILE*f = fopen(strDbg.c_str(), "wb");
-  fwrite(pssh_.c_str(), 1, pssh_.size(), f);
-  fclose(f);
-#endif
-
   std::string strLibPath = host->GetLibraryPath();
   if (strLibPath.empty())
   {
@@ -350,12 +370,11 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   strBasePath += cSep;
   host->CreateDirectory(strBasePath.c_str());
 
-  wv_adapter = new media::CdmAdapter("com.widevine.alpha", strLibPath, strBasePath, media::CdmConfig(false, true), *(dynamic_cast<media::CdmAdapterClient*>(this)));
+  wv_adapter = std::shared_ptr<media::CdmAdapter>(new media::CdmAdapter("com.widevine.alpha", strLibPath, strBasePath, media::CdmConfig(false, true), (dynamic_cast<media::CdmAdapterClient*>(this))));
   if (!wv_adapter->valid())
   {
     Log(SSD_HOST::LL_ERROR, "Unable to load widevine shared library (%s)", strLibPath.c_str());
-    delete wv_adapter;
-    wv_adapter = 0;
+    wv_adapter = nullptr;
     return;
   }
 
@@ -366,39 +385,58 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   if (license_url_.find('|') == std::string::npos)
     license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=true|JBlicense";
 
-  if (!GetLicense())
-  {
-    Log(SSD_HOST::LL_ERROR, "Unable to generate a license");
-    delete wv_adapter;
-    wv_adapter = 0;
-  }
-  else
-    wv_adapter->QueryOutputProtectionStatus();
   SetParentIsOwner(false);
 }
 
 WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
 {
   Log(SSD_HOST::LL_DEBUG, "Destroying wv_adapter");
-  delete wv_adapter;
-  wv_adapter = 0;
+
+  wv_adapter->RemoveClient();
+
+  for (auto s : sessions_)
+    wv_adapter->CloseSession(++promise_id_, s->session.data(), s->session.size());
+
+  wv_adapter = nullptr;
 }
 
-uint32_t WV_CencSingleSampleDecrypter::GetCapabilities()
+uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle)
 {
   decrypter_caps_ = SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_SUPPORTS_DECODING;
   return decrypter_caps_;
 }
 
-bool WV_CencSingleSampleDecrypter::GetLicense()
+const char *WV_CencSingleSampleDecrypter::GetSessionId(size_t sessionHandle)
 {
-  if (strcmp(&pssh_[4], "pssh") == 0)
+  return sessions_.back()->session.c_str();
+}
+
+size_t WV_CencSingleSampleDecrypter::CreateSession(AP4_DataBuffer &pssh)
+{
+  if (pssh.GetDataSize() > 256)
   {
-    wv_adapter->CreateSessionAndGenerateRequest(0, cdm::SessionType::kTemporary, cdm::InitDataType::kCenc, reinterpret_cast<const uint8_t *>(pssh_.data()), pssh_.size());
+    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
+    return 0;
+  }
+
+#ifdef _DEBUG
+  std::string strDbg = host->GetProfilePath();
+  strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.init";
+  FILE*f = fopen(strDbg.c_str(), "wb");
+  fwrite(pssh.GetData(), 1, pssh.GetDataSize(), f);
+  fclose(f);
+#endif
+
+  sessions_.push_back(new WVSession);
+
+  if (memcmp(pssh.GetData()+4, "pssh", 4) == 0)
+  {
+    wv_adapter->CreateSessionAndGenerateRequest(0, cdm::SessionType::kTemporary, cdm::InitDataType::kCenc,
+      reinterpret_cast<const uint8_t *>(pssh.GetData()), pssh.GetDataSize());
   }
   else
   {
-    unsigned int buf_size = 32 + pssh_.size();
+    unsigned int buf_size = 32 + pssh.GetDataSize();
     uint8_t buf[1024];
 
     // This will request a new session and initializes session_id and message members in cdm_adapter.
@@ -408,43 +446,49 @@ bool WV_CencSingleSampleDecrypter::GetLicense()
       0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed, 0x00, 0x00, 0x00, 0x00 };
 
     proto[3] = static_cast<uint8_t>(buf_size);
-    proto[31] = static_cast<uint8_t>(pssh_.size());
+    proto[31] = static_cast<uint8_t>(pssh.GetDataSize());
 
     memcpy(buf, proto, sizeof(proto));
-    memcpy(&buf[32], pssh_.data(), pssh_.size());
+    memcpy(&buf[32], pssh.GetData(), pssh.GetDataSize());
 
     wv_adapter->CreateSessionAndGenerateRequest(0, cdm::SessionType::kTemporary, cdm::InitDataType::kCenc, buf, buf_size);
   }
 
-  //Now check messages and fire as long there is no error and messages are present.
-
-  while (!messages_.empty())
+  if (sessions_.back()->session.empty())
   {
-    media::CdmAdapterClient::CDMADPMSG msg = messages_.front();
-    messages_.pop_front();
-    switch (msg)
-    {
-    case media::CdmAdapterClient::kError:
-      return false;
-    case media::CdmAdapterClient::kSessionMessage:
-      if (!SendSessionMessage())
-        return false;
-      break;
-    default:
-      ;
-    }
+    Log(SSD_HOST::LL_ERROR, "License update not successful (no session)");
+    return 0;
   }
 
-  if (!wv_adapter->KeyIdValid())
+  SendSessionMessage(sessions_.back()->session.data(), sessions_.back()->session.size(),
+    sessions_.back()->challenge.GetData(), sessions_.back()->challenge.GetDataSize());
+
+  if (sessions_.back()->keys.empty())
   {
-    Log(SSD_HOST::LL_ERROR, "License update not successful");
-    return false;
+    Log(SSD_HOST::LL_ERROR, "License update not successful (no keys)");
+    CloseSession((size_t)sessions_.back());
+    return 0;
   }
+
+  sessions_.back()->pssh.SetData(pssh.GetData(), pssh.GetDataSize());
+
   Log(SSD_HOST::LL_DEBUG, "License update successful");
-  return true;
+  return (size_t)sessions_.back();
 }
 
-bool WV_CencSingleSampleDecrypter::SendSessionMessage()
+void WV_CencSingleSampleDecrypter::CloseSession(size_t sessionhandle)
+{
+  for (std::vector<WVSession*>::iterator b(sessions_.begin()), e(sessions_.end());b!=e;++b)
+    if ((size_t)*b == sessionhandle)
+    {
+      wv_adapter->CloseSession(++promise_id_, (*b)->session.data(), (*b)->session.size());
+      delete *b;
+      sessions_.erase(b);
+      break;
+    }
+}
+
+bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint32_t session_size, const uint8_t *message, uint32_t message_size)
 {
   std::vector<std::string> headers, header, blocks = split(license_url_, '|');
   if (blocks.size() != 4)
@@ -457,7 +501,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
   std::string strDbg = host->GetProfilePath();
   strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.challenge";
   FILE*f = fopen(strDbg.c_str(), "wb");
-  fwrite(wv_adapter->GetMessage(), 1, wv_adapter->GetMessageSize(), f);
+  fwrite(message, 1, message_size, f);
   fclose(f);
 #endif
 
@@ -467,7 +511,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
   {
     if (insPos >= 0 && blocks[0][insPos - 1] == 'B')
     {
-      std::string msgEncoded = b64_encode(wv_adapter->GetMessage(), wv_adapter->GetMessageSize(), true);
+      std::string msgEncoded = b64_encode(message, message_size, true);
       blocks[0].replace(insPos - 1, 6, msgEncoded);
     }
     else
@@ -507,14 +551,14 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       {
         if (blocks[2][insPos - 1] == 'B' || blocks[2][insPos - 1] == 'b')
         {
-          std::string msgEncoded = b64_encode(wv_adapter->GetMessage(), wv_adapter->GetMessageSize(), blocks[2][insPos - 1] == 'B');
+          std::string msgEncoded = b64_encode(message, message_size, blocks[2][insPos - 1] == 'B');
           blocks[2].replace(insPos - 1, 6, msgEncoded);
           sidSearchPos += msgEncoded.size();
         }
         else
         {
-          blocks[2].replace(insPos - 1, 6, reinterpret_cast<const char*>(wv_adapter->GetMessage()), wv_adapter->GetMessageSize());
-          sidSearchPos += wv_adapter->GetMessageSize();
+          blocks[2].replace(insPos - 1, 6, reinterpret_cast<const char*>(message), message_size);
+          sidSearchPos += message_size;
         }
       }
       else
@@ -530,11 +574,11 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
         {
           if (blocks[2][insPos - 1] == 'B' || blocks[2][insPos - 1] == 'b')
           {
-            std::string msgEncoded = b64_encode(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize(), blocks[2][insPos - 1] == 'B');
+            std::string msgEncoded = b64_encode(reinterpret_cast<const unsigned char*>(session),session_size, blocks[2][insPos - 1] == 'B');
             blocks[2].replace(insPos - 1, 6, msgEncoded);
           }
           else
-            blocks[2].replace(insPos - 1, 6, reinterpret_cast<const char*>(wv_adapter->GetSessionId()), wv_adapter->GetSessionIdSize());
+            blocks[2].replace(insPos - 1, 6, session, session_size);
         }
         else
         {
@@ -596,10 +640,11 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
           unsigned int decoded_size = 2048;
           uint8_t decoded[2048];
           b64_decode(response.c_str() + tokens[i + 1].start, tokens[i + 1].end - tokens[i + 1].start, decoded, decoded_size);
-          wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(decoded), decoded_size);
+          wv_adapter->UpdateSession(++promise_id_, session, session_size, reinterpret_cast<const uint8_t*>(decoded), decoded_size);
         }
         else
-          wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(response.c_str() + tokens[i + 1].start), tokens[i + 1].end - tokens[i + 1].start);
+          wv_adapter->UpdateSession(++promise_id_, session, session_size,
+            reinterpret_cast<const uint8_t*>(response.c_str() + tokens[i + 1].start), tokens[i + 1].end - tokens[i + 1].start);
       }
       else
       {
@@ -613,7 +658,8 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage()
       goto SSMFAIL;
     }
   } else //its binary - simply push the returned data as update
-    wv_adapter->UpdateSession(reinterpret_cast<const uint8_t*>(response.data()), response.size());
+    wv_adapter->UpdateSession(++promise_id_, session, session_size, 
+      reinterpret_cast<const uint8_t*>(response.data()), response.size());
 
   return true;
 SSMFAIL:
@@ -654,19 +700,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
     return AP4_SUCCESS;
   }
 
-  if (data_in.GetDataSize() == 0)
-  {
-    data_out.SetData(reinterpret_cast<const AP4_Byte*>("CRYPTO"), 6);
-    uint16_t cryptosize = 6 + 2 + (1 + wv_adapter->GetSessionIdSize()) + 16;
-    data_out.AppendData(reinterpret_cast<const AP4_Byte*>(&cryptosize), sizeof(cryptosize));
-    uint8_t dummy(wv_adapter->GetSessionIdSize());
-    data_out.AppendData(&dummy, 1);
-    data_out.AppendData(wv_adapter->GetSessionId(), wv_adapter->GetSessionIdSize());
-    uint8_t keysystem[16] = { 0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed };
-    data_out.AppendData(keysystem, 16);
-    return AP4_SUCCESS;
-  }
-  else if(decrypter_caps_ & SSD_DECRYPTER::SSD_SECURE_PATH) //we can not decrypt only
+  if(decrypter_caps_ & SSD_DECRYPTER::SSD_SECURE_PATH) //we can not decrypt only
   {
     if (nal_length_size_ > 4)
     {
@@ -800,8 +834,8 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
   }
   else
   {
-    cdm_in.key_id = wv_adapter->GetKeyId();
-    cdm_in.key_id_size = wv_adapter->GetKeyIdSize();
+    cdm_in.key_id = 0; //wv_adapter->GetKeyId();
+    cdm_in.key_id_size = 0;// wv_adapter->GetKeyIdSize();
   }
 
   cdm_in.num_subsamples = subsample_count;
@@ -941,7 +975,6 @@ void WV_CencSingleSampleDecrypter::ResetVideo()
   wv_adapter->ResetDecoder(cdm::kStreamTypeVideo);
 }
 
-
 /*********************************************************************************************/
 
 class WVDecrypter: public SSD_DECRYPTER
@@ -963,9 +996,9 @@ public:
     return 0;
   };
 
-  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &streamCodec, AP4_DataBuffer &serverCertificate) override
+  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &serverCertificate) override
   {
-    decrypter_ = new WV_CencSingleSampleDecrypter(licenseKey_, streamCodec, serverCertificate);
+    decrypter_ = new WV_CencSingleSampleDecrypter(licenseKey_, serverCertificate);
     if (!decrypter_->initialized())
     {
       delete decrypter_;
@@ -974,12 +1007,34 @@ public:
     return decrypter_;
   }
 
-  virtual uint32_t GetCapabilities()
+  virtual size_t CreateSession(AP4_DataBuffer &streamCodec) override
   {
     if (!decrypter_)
       return 0;
 
-    return decrypter_->GetCapabilities();
+    return decrypter_->CreateSession(streamCodec);
+  }
+
+  virtual void CloseSession(size_t sessionHandle) override
+  {
+    if (!decrypter_)
+      return decrypter_->CloseSession(sessionHandle);
+  }
+
+  virtual uint32_t GetCapabilities(size_t sessionHandle) override
+  {
+    if (!decrypter_)
+      return 0;
+
+    return decrypter_->GetCapabilities(sessionHandle);
+  }
+
+  virtual const char *GetSessionId(size_t sessionHandle) override
+  {
+    if (!decrypter_)
+      return false;
+
+    return decrypter_->GetSessionId(sessionHandle);
   }
 
   virtual bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData)

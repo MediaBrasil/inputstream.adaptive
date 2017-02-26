@@ -65,6 +65,12 @@ typedef void (*INITIALIZE_CDM_MODULE_FN)();
 
 }  // namespace
 
+void timerfunc(std::shared_ptr<CdmAdapter> adp, uint64_t delay, void* context)
+{
+  std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+  adp->TimerExpired(context);
+}
+
 /*******************************         CdmAdapter        ****************************************/
 
 
@@ -73,7 +79,7 @@ CdmAdapter::CdmAdapter(
   const std::string& cdm_path,
   const std::string& base_path,
   const CdmConfig& cdm_config,
-  CdmAdapterClient &client)
+  CdmAdapterClient *client)
 : key_system_(key_system)
 , cdm_base_path_(base_path)
 , cdm_config_(cdm_config)
@@ -81,8 +87,6 @@ CdmAdapter::CdmAdapter(
 , cdm_(0)
 , library_(0)
 , active_buffer_(0)
-, timer_expired_(0)
-, timer_context_(0)
 {
   //DCHECK(!key_system_.empty());
   Initialize(cdm_path);
@@ -147,6 +151,19 @@ void CdmAdapter::Initialize(const std::string& cdm_path)
   }
 }
 
+void CdmAdapter::SendClientMessage(const char* session, uint32_t session_size, CdmAdapterClient::CDMADPMSG msg, const uint8_t *data, size_t data_size, uint32_t status)
+{
+  std::lock_guard<std::mutex> guard(client_mutex_);
+  if (client_)
+    client_->OnCDMMessage(session, session_size, msg, data, data_size, status);
+}
+
+void CdmAdapter::RemoveClient()
+{
+  std::lock_guard<std::mutex> guard(client_mutex_);
+  client_ = nullptr;
+}
+
 void CdmAdapter::SetServerCertificate(uint32_t promise_id,
   const uint8_t* server_certificate_data,
   uint32_t server_certificate_data_size)
@@ -186,19 +203,8 @@ void CdmAdapter::UpdateSession(uint32_t promise_id,
   const uint8_t* response,
   uint32_t response_size)
 {
-  license_ = std::string((const char*)response, response_size);
   cdm_->UpdateSession(promise_id, session_id, session_id_size,
             response, response_size);
-}
-
-void CdmAdapter::UpdateSession(const uint8_t* response, uint32_t response_size)
-{
-  UpdateSession(2, session_id_.c_str(), session_id_.size(), response, response_size);
-}
-
-void CdmAdapter::UpdateSession()
-{
-  UpdateSession((const uint8_t*)license_.c_str(), license_.size());
 }
 
 void CdmAdapter::CloseSession(uint32_t promise_id,
@@ -223,11 +229,6 @@ void CdmAdapter::TimerExpired(void* context)
 cdm::Status CdmAdapter::Decrypt(const cdm::InputBuffer& encrypted_buffer,
   cdm::DecryptedBlock* decrypted_buffer)
 {
-  if (timer_expired_ && gtc() > timer_expired_)
-  {
-    timer_expired_ = 0;
-    TimerExpired(timer_context_);
-  }
   //We need this wait here for fast systems, during buffering
   //widewine stopps if some seconds (5??) are fetched too fast
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -295,13 +296,12 @@ cdm::Buffer* CdmAdapter::Allocate(uint32_t capacity)
   if (active_buffer_)
   return active_buffer_;
   else
-  return client_.AllocateBuffer(capacity);
+  return client_->AllocateBuffer(capacity);
 }
 
 void CdmAdapter::SetTimer(int64_t delay_ms, void* context)
 {
-  //timer_context_ = context;
-  //timer_expired_ = gtc() + delay_ms;
+  std::thread(timerfunc, shared_from_this(), delay_ms, context).detach();
 }
 
 cdm::Time CdmAdapter::GetCurrentWallTime()
@@ -336,11 +336,7 @@ void CdmAdapter::OnSessionMessage(const char* session_id,
                                 const char* legacy_destination_url,
                                 uint32_t legacy_destination_url_size)
 {
-  session_id_ = std::string(session_id, session_id_size);
-  message_ = std::string(message, message_size);
-  message_type_ = message_type;
-
-  client_.OnCDMMessage(CdmAdapterClient::kSessionMessage);
+  SendClientMessage(session_id, session_id_size, CdmAdapterClient::kSessionMessage, reinterpret_cast<const uint8_t*>(message), message_size, 0);
 }
 
 void CdmAdapter::OnSessionKeysChange(const char* session_id,
@@ -350,26 +346,30 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
                                   uint32_t keys_info_count)
 {
   for (uint32_t i(0); i < keys_info_count; ++i)
-  if (keys_info[i].status == cdm::kUsable || keys_info[i].status == cdm::kOutputRestricted)
   {
-    usable_key_id_ = std::string(reinterpret_cast<const char*>(keys_info[i].key_id), keys_info[i].key_id_size);
-    if (keys_info[i].status == cdm::kUsable)
-    break;
+    char fmtbuf[128], *fmtptr(fmtbuf+11);
+    strcpy(fmtbuf, "Sessionkey: ");
+    for (unsigned int j(0); j < keys_info[i].key_id_size; ++j)
+      fmtptr += sprintf(fmtptr, "%02d", (int)keys_info[i].key_id[j]);
+    sprintf(fmtptr, " status: %d syscode: %u", keys_info[i].status, keys_info[i].system_code);
+    client_->CDMLog(fmtbuf);
+
+    SendClientMessage(session_id, session_id_size, CdmAdapterClient::kSessionKeysChange,
+      keys_info[i].key_id, keys_info[i].key_id_size, keys_info[i].status);
   }
-  client_.OnCDMMessage(CdmAdapterClient::kSessionKeysChange);
 }
 
 void CdmAdapter::OnExpirationChange(const char* session_id,
                   uint32_t session_id_size,
                   cdm::Time new_expiry_time)
 {
-  client_.OnCDMMessage(CdmAdapterClient::kSessionExpired);
+  SendClientMessage(session_id, session_id_size, CdmAdapterClient::kSessionExpired, nullptr, 0, 0);
 }
 
 void CdmAdapter::OnSessionClosed(const char* session_id,
                  uint32_t session_id_size)
 {
-  client_.OnCDMMessage(CdmAdapterClient::kSessionClosed);
+  SendClientMessage(session_id, session_id_size, CdmAdapterClient::kSessionClosed, nullptr, 0, 0);
 }
 
 void CdmAdapter::OnLegacySessionError(const char* session_id,
@@ -379,7 +379,7 @@ void CdmAdapter::OnLegacySessionError(const char* session_id,
                                     const char* error_message,
                                     uint32_t error_message_size)
 {
-  client_.OnCDMMessage(CdmAdapterClient::kLegacySessionError);
+  SendClientMessage(session_id, session_id_size, CdmAdapterClient::kLegacySessionError, nullptr, 0, 0);
 }
 
 void CdmAdapter::SendPlatformChallenge(const char* service_id,
@@ -408,11 +408,6 @@ void CdmAdapter::OnDeferredInitializationDone(cdm::StreamType stream_type,
 cdm::FileIO* CdmAdapter::CreateFileIO(cdm::FileIOClient* client)
 {
   return new CdmFileIoImpl(cdm_base_path_, client);
-}
-
-bool CdmAdapter::SessionValid()
-{
-  return !session_id_.empty() && !message_.empty();
 }
 
 /*******************************         CdmFileIoImpl        ****************************************/
@@ -444,23 +439,23 @@ void CdmFileIoImpl::Read()
   size_t sz(0);
 
   free(reinterpret_cast<void*>(data_buffer_));
-  data_buffer_ = 0;
+  data_buffer_ = nullptr;
 
   file_descriptor_ = fopen(base_path_.c_str(), "rb");
 
   if (file_descriptor_)
   {
-  status = cdm::FileIOClient::kSuccess;
-  fseek(file_descriptor_, 0, SEEK_END);
-  sz = ftell(file_descriptor_);
-  if (sz)
-  {
-    fseek(file_descriptor_, 0, SEEK_SET);
-    if ((data_buffer_ = reinterpret_cast<uint8_t*>(malloc(sz))) == nullptr || fread(data_buffer_, 1, sz, file_descriptor_) != sz)
-    status = cdm::FileIOClient::kError;
-  }
+    status = cdm::FileIOClient::kSuccess;
+    fseek(file_descriptor_, 0, SEEK_END);
+    sz = ftell(file_descriptor_);
+    if (sz)
+    {
+      fseek(file_descriptor_, 0, SEEK_SET);
+      if ((data_buffer_ = reinterpret_cast<uint8_t*>(malloc(sz))) == nullptr || fread(data_buffer_, 1, sz, file_descriptor_) != sz)
+      status = cdm::FileIOClient::kError;
+    }
   } else 
-  status = cdm::FileIOClient::kSuccess;
+    status = cdm::FileIOClient::kSuccess;
   client_->OnReadComplete(status, data_buffer_, sz);
 }
 

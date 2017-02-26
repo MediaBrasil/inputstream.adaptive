@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 #include <inttypes.h>
+#include <memory>
+#include <mutex>
 
 #include "../../base/native_library.h"
 #include "../../base/compiler_specific.h"
@@ -27,20 +29,24 @@ public:
     kSessionClosed,
     kLegacySessionError
   };
-  virtual void OnCDMMessage(CDMADPMSG msg) = 0;
+  virtual void OnCDMMessage(const char* session, uint32_t session_size, CDMADPMSG msg, const uint8_t *data, size_t data_size, uint32_t status) = 0;
+  virtual void CDMLog(const char *msg) = 0;
   virtual cdm::Buffer *AllocateBuffer(size_t sz) = 0;
 };
 
-class CdmAdapter : NON_EXPORTED_BASE(public cdm::Host_8)
+class CdmAdapter : public std::enable_shared_from_this<CdmAdapter>
+  , NON_EXPORTED_BASE(public cdm::Host_8)
 {
  public:
 	CdmAdapter(const std::string& key_system,
     const std::string& cdm_path,
     const std::string& base_path,
     const CdmConfig& cdm_config,
-    CdmAdapterClient &client);
+    CdmAdapterClient *client);
 
 	virtual ~CdmAdapter();
+
+  void RemoveClient();
 
 	void SetServerCertificate(uint32_t promise_id,
 		const uint8_t* server_certificate_data,
@@ -63,16 +69,11 @@ class CdmAdapter : NON_EXPORTED_BASE(public cdm::Host_8)
 		const uint8_t* response,
 		uint32_t response_size);
 
-	void UpdateSession(const uint8_t* response,
-		uint32_t response_size);
-
-	void UpdateSession();
-
 	void CloseSession(uint32_t promise_id,
 		const char* session_id,
 		uint32_t session_id_size);
 
-	void RemoveSession(uint32_t promise_id,
+  void RemoveSession(uint32_t promise_id,
 		const char* session_id,
 		uint32_t session_id_size);
 
@@ -168,38 +169,24 @@ class CdmAdapter : NON_EXPORTED_BASE(public cdm::Host_8)
 
  public: //Misc
 	bool valid(){ return library_ != 0; };
-	bool SessionValid();
-	bool KeyIdValid(){ return !usable_key_id_.empty(); };
-	const uint8_t * GetMessage()const{ return reinterpret_cast<const uint8_t*>(message_.data()); };
-	unsigned int GetMessageSize()const { return static_cast<unsigned int>(message_.size()); };
-	const uint8_t * GetKeyId()const{ return reinterpret_cast<const uint8_t*>(usable_key_id_.data()); };
-	unsigned int GetKeyIdSize()const { return static_cast<unsigned int>(usable_key_id_.size()); };
-	const uint8_t * GetSessionId()const { return reinterpret_cast<const uint8_t*>(session_id_.data()); };
-	unsigned int GetSessionIdSize()const { return static_cast<unsigned int>(session_id_.size()); };
 private:
   virtual void Initialize(const std::string& cdm_path);
+  void SendClientMessage(const char* session, uint32_t session_size, CdmAdapterClient::CDMADPMSG msg, const uint8_t *data, size_t data_size, uint32_t status);
 
   // Keep a reference to the CDM.
   base::NativeLibrary library_;
 
   std::string cdm_base_path_;
-  CdmAdapterClient &client_;
+  CdmAdapterClient *client_;
+  std::mutex client_mutex_;
 
   std::string key_system_;
   CdmConfig cdm_config_;
-
-  std::string session_id_;
-  std::string message_;
-  std::string license_;
-  std::string usable_key_id_;
 
   cdm::MessageType message_type_;
   cdm::Buffer *active_buffer_;
 
   cdm::ContentDecryptionModule *cdm_;
-
-  uint64_t timer_expired_;
-  void *timer_context_;
 
   DISALLOW_COPY_AND_ASSIGN(CdmAdapter);
 };
