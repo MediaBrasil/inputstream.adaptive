@@ -350,7 +350,7 @@ void CdmAdapter::OnSessionKeysChange(const char* session_id,
     char fmtbuf[128], *fmtptr(fmtbuf+11);
     strcpy(fmtbuf, "Sessionkey: ");
     for (unsigned int j(0); j < keys_info[i].key_id_size; ++j)
-      fmtptr += sprintf(fmtptr, "%02d", (int)keys_info[i].key_id[j]);
+      fmtptr += sprintf(fmtptr, "%02X", (int)keys_info[i].key_id[j]);
     sprintf(fmtptr, " status: %d syscode: %u", keys_info[i].status, keys_info[i].system_code);
     client_->CDMLog(fmtbuf);
 
@@ -396,7 +396,7 @@ void CdmAdapter::EnableOutputProtection(uint32_t desired_protection_mask)
 
 void CdmAdapter::QueryOutputProtectionStatus()
 {
-  cdm_->OnQueryOutputProtectionStatus(cdm::kQuerySucceeded, 0xFF, cdm::kProtectionHDCP);
+  cdm_->OnQueryOutputProtectionStatus(cdm::kQuerySucceeded, cdm::kLinkTypeInternal, cdm::kProtectionHDCP);
 }
 
 void CdmAdapter::OnDeferredInitializationDone(cdm::StreamType stream_type,

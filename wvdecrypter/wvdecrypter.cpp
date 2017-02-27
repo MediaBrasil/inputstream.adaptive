@@ -239,7 +239,7 @@ public:
 
   size_t CreateSession(AP4_DataBuffer &pssh);
   void CloseSession(size_t sessionhandle);
-  uint32_t GetCapabilities(size_t sessionHandle);
+  uint32_t GetCapabilities(size_t sessionHandle, const uint8_t* key);
   const char *GetSessionId(size_t sessionHandle);
 
   bool initialized()const { return wv_adapter != nullptr; };
@@ -385,6 +385,8 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   if (license_url_.find('|') == std::string::npos)
     license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=true|JBlicense";
 
+  wv_adapter->QueryOutputProtectionStatus();
+
   SetParentIsOwner(false);
 }
 
@@ -404,15 +406,46 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
   wv_adapter = nullptr;
 }
 
-uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle)
+uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle, const uint8_t* key)
 {
-  decrypter_caps_ = SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_SUPPORTS_DECODING;
+  if (sessions_.empty())
+    return 0;
+
+  decrypter_caps_ = SSD_DECRYPTER::SSD_SUPPORTS_DECODING;
+
+  WVSession *session(sessions_.back());
+  if (session->keys.empty())
+    return 0;
+
+  for (auto k : session->keys)
+    if (!key || memcmp(k.keyid.data(), key, 16) == 0)
+    {
+      if(k.status != 0)
+        decrypter_caps_ |= (SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_HDCP_RESTRICTED | SSD_DECRYPTER::SSD_ANNEXB_REQUIRED);
+      break;
+    }
+
+  //ToDo: Call Decrypt()
+  if (decrypter_caps_ == SSD_DECRYPTER::SSD_SUPPORTS_DECODING)
+  {
+    key_ = key;
+    key_size_ = 16;
+
+    AP4_DataBuffer in, out;
+    in.SetDataSize(4);
+    AP4_UI32 encb[2] = { 1,1 };
+    AP4_UI16 clearb[2] = { 1,1 };
+    const AP4_UI08 iv[] = { 1,2,3,4,5,6,7,8,0,0,0,0,0,0,0,0 };
+    if (DecryptSampleData(in,out,iv,2,clearb,encb) != AP4_SUCCESS)
+      decrypter_caps_ |= (SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_ANNEXB_REQUIRED);
+    key_size_ = 0;
+  }
   return decrypter_caps_;
 }
 
 const char *WV_CencSingleSampleDecrypter::GetSessionId(size_t sessionHandle)
 {
-  return sessions_.back()->session.c_str();
+  return sessions_.empty()? nullptr : sessions_.back()->session.c_str();
 }
 
 size_t WV_CencSingleSampleDecrypter::CreateSession(AP4_DataBuffer &pssh)
@@ -1025,12 +1058,12 @@ public:
       return decrypter_->CloseSession(sessionHandle);
   }
 
-  virtual uint32_t GetCapabilities(size_t sessionHandle) override
+  virtual uint32_t GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
   {
     if (!decrypter_)
       return 0;
 
-    return decrypter_->GetCapabilities(sessionHandle);
+    return decrypter_->GetCapabilities(sessionHandle, keyid);
   }
 
   virtual const char *GetSessionId(size_t sessionHandle) override

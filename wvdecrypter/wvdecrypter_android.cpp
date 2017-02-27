@@ -65,7 +65,7 @@ public:
 
   size_t CreateSession(AP4_DataBuffer &pssh);
   void CloseSession(size_t sessionhandle);
-  uint32_t GetCapabilities(size_t sessionHandle);
+  uint32_t GetCapabilities(size_t sessionHandle, const uint8_t *keyid);
   const char *GetSessionId(size_t sessionHandle);
 
   bool initialized()const { return media_drm_ != 0; };
@@ -187,7 +187,7 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
   }
 }
 
-uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle)
+uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle, const uint8_t *keyid)
 {
   return SSD_DECRYPTER::SSD_SECURE_PATH;
 }
@@ -693,12 +693,12 @@ public:
       return decrypter_->CloseSession(sessionHandle);
   }
 
-  virtual uint32_t GetCapabilities(size_t sessionHandle) override
+  virtual uint32_t GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
   {
     if (!decrypter_)
       return 0;
 
-    return decrypter_->GetCapabilities(sessionHandle);
+    return decrypter_->GetCapabilities(sessionHandle, keyid);
   }
 
   virtual const char *GetSessionId(size_t sessionHandle) override
