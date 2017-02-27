@@ -395,7 +395,11 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
   wv_adapter->RemoveClient();
 
   for (auto s : sessions_)
+  {
     wv_adapter->CloseSession(++promise_id_, s->session.data(), s->session.size());
+    delete s;
+  }
+  sessions_.clear();
 
   wv_adapter = nullptr;
 }
@@ -1032,7 +1036,7 @@ public:
   virtual const char *GetSessionId(size_t sessionHandle) override
   {
     if (!decrypter_)
-      return false;
+      return nullptr;
 
     return decrypter_->GetSessionId(sessionHandle);
   }
