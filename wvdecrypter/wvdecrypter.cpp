@@ -860,8 +860,8 @@ bool WV_CencSingleSampleDecrypter::OpenVideoDecoder(const SSD_VIDEOINITDATA *ini
   vconfig.codec = static_cast<cdm::VideoDecoderConfig::VideoCodec>(initData->codec);
   vconfig.coded_size.width = initData->width;
   vconfig.coded_size.height = initData->height;
-  vconfig.extra_data = 0;// const_cast<uint8_t*>(initData->extraData);
-  vconfig.extra_data_size = 0;// initData->extraDataSize;
+  vconfig.extra_data = const_cast<uint8_t*>(initData->extraData);
+  vconfig.extra_data_size = initData->extraDataSize;
   vconfig.format = static_cast<cdm::VideoFormat> (initData->videoFormats[0]);
   vconfig.profile = static_cast<cdm::VideoDecoderConfig::VideoCodecProfile>(initData->codecProfile);
 
