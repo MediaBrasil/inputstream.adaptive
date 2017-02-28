@@ -349,7 +349,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   strBasePath += "widevine";
   strBasePath += cSep;
   host->CreateDirectory(strBasePath.c_str());
-  
+
   //Build up a CDM path to store decrypter specific stuff. Each domain gets it own path
   const char* bspos(strchr(license_url_.c_str(), ':'));
   if (!bspos || bspos[1] != '/' || bspos[2] != '/' || !(bspos = strchr(bspos + 3, '/')))
@@ -365,7 +365,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   char buffer[1024];
   buffer[(bspos - license_url_.c_str()) * 2] = 0;
   AP4_FormatHex(reinterpret_cast<const uint8_t*>(license_url_.c_str()), bspos - license_url_.c_str(), buffer);
-  
+
   strBasePath += buffer;
   strBasePath += cSep;
   host->CreateDirectory(strBasePath.c_str());
@@ -432,10 +432,11 @@ uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle, con
     key_size_ = 16;
 
     AP4_DataBuffer in, out;
-    in.SetDataSize(4);
     AP4_UI32 encb[2] = { 1,1 };
-    AP4_UI16 clearb[2] = { 1,1 };
+    AP4_UI16 clearb[2] = { 5,5 };
+    AP4_Byte vf[12]={0,0,0,1,9,255,0,0,0,1,10,255};
     const AP4_UI08 iv[] = { 1,2,3,4,5,6,7,8,0,0,0,0,0,0,0,0 };
+    in.SetBuffer(vf,12);
     if (DecryptSampleData(in,out,iv,2,clearb,encb) != AP4_SUCCESS)
       decrypter_caps_ |= (SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_ANNEXB_REQUIRED);
     key_size_ = 0;
@@ -557,9 +558,9 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
       return false;
     }
   }
-  
+
   void* file = host->CURLCreate(blocks[0].c_str());
-  
+
   size_t nbRead;
   std::string response;
   char buf[2048];
