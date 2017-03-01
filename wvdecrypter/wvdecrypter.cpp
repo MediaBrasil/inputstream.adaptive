@@ -239,7 +239,7 @@ public:
 
   size_t CreateSession(AP4_DataBuffer &pssh);
   void CloseSession(size_t sessionhandle);
-  uint32_t GetCapabilities(size_t sessionHandle, const uint8_t* key);
+  const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(size_t sessionHandle, const uint8_t* key);
   const char *GetSessionId(size_t sessionHandle);
 
   bool initialized()const { return wv_adapter != nullptr; };
@@ -315,7 +315,7 @@ private:
   const AP4_UI08 *key_;
   AP4_UI08 nal_length_size_;
   AP4_DataBuffer annexb_sps_pps_;
-  uint32_t decrypter_caps_;
+  SSD_DECRYPTER::SSD_CAPS decrypter_caps_;
   void *host_instance_;
   uint32_t promise_id_;
 
@@ -335,10 +335,11 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   , key_size_(0)
   , key_(0)
   , nal_length_size_(0)
-  , decrypter_caps_(0)
   , host_instance_(0)
   , promise_id_(0)
 {
+  memset(&decrypter_caps_, 0, sizeof(decrypter_caps_));
+
   std::string strLibPath = host->GetLibraryPath();
   if (strLibPath.empty())
   {
@@ -386,7 +387,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
 
   // For backward compatibility: If no | is found in URL, make the amazon convention out of it
   if (license_url_.find('|') == std::string::npos)
-    license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=true|JBlicense";
+    license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=true|JBlicense;hdcpEnforcementResolutionPixels";
 
   wv_adapter->QueryOutputProtectionStatus();
 
@@ -409,30 +410,39 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
   wv_adapter = nullptr;
 }
 
-uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle, const uint8_t* key)
+const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle, const uint8_t* key)
 {
   if (sessions_.empty())
-    return 0;
+    return decrypter_caps_;
 
-  decrypter_caps_ = SSD_DECRYPTER::SSD_SUPPORTS_DECODING;
+  decrypter_caps_.flags = SSD_DECRYPTER::SSD_CAPS::SSD_SUPPORTS_DECODING;
   use_single_decrypt_ = false;
 
   WVSession *session(sessions_.back());
   if (session->keys.empty())
-    return 0;
+    return decrypter_caps_;
 
-  for (auto k : session->keys)
-    if (!key || memcmp(k.keyid.data(), key, 16) == 0)
-    {
-      if(k.status != 0)
-        decrypter_caps_ |= (SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_HDCP_RESTRICTED | SSD_DECRYPTER::SSD_ANNEXB_REQUIRED);
-      break;
-    }
+  if (decrypter_caps_.hdcpLimit)
+  {
+    decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
+  }
+  else
+  {
+    for (auto k : session->keys)
+      if (!key || memcmp(k.keyid.data(), key, 16) == 0)
+      {
+        if (k.status != 0)
+          decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
+        break;
+      }
+  }
 
-  if (decrypter_caps_ == SSD_DECRYPTER::SSD_SUPPORTS_DECODING)
+  if (decrypter_caps_.flags == SSD_DECRYPTER::SSD_CAPS::SSD_SUPPORTS_DECODING)
   {
     key_ = key;
     key_size_ = 16;
+
+    decrypter_caps_.hdcpVersion = 99;
 
     AP4_DataBuffer in, out;
     AP4_UI32 encb[2] = { 1,1 };
@@ -441,14 +451,21 @@ uint32_t WV_CencSingleSampleDecrypter::GetCapabilities(size_t sessionHandle, con
     const AP4_UI08 iv[] = { 1,2,3,4,5,6,7,8,0,0,0,0,0,0,0,0 };
     in.SetBuffer(vf,12);
     in.SetDataSize(12);
-    if (DecryptSampleData(in, out, iv, 2, clearb, encb) != AP4_SUCCESS)
-    {
-      encb[0] = 12;
-      clearb[0] = 0;
-      if (DecryptSampleData(in, out, iv, 1, clearb, encb) != AP4_SUCCESS)
-        decrypter_caps_ |= (SSD_DECRYPTER::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_ANNEXB_REQUIRED);
-      else
-        use_single_decrypt_ = true;
+    try {
+      if (DecryptSampleData(in, out, iv, 2, clearb, encb) != AP4_SUCCESS)
+      {
+        encb[0] = 12;
+        clearb[0] = 0;
+        if (DecryptSampleData(in, out, iv, 1, clearb, encb) != AP4_SUCCESS)
+          decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
+        else
+        {
+          use_single_decrypt_ = true;
+        }
+      }
+    }
+    catch (...) {
+      decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
     }
     key_size_ = 0;
   }
@@ -677,10 +694,28 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
       jsmn_init(&jsn);
       int i(0), numTokens = jsmn_parse(&jsn, response.c_str(), response.size(), tokens, 100);
 
-      for (; i < numTokens; ++i)
-        if (tokens[i].type == JSMN_STRING && tokens[i].size==1
-          && strncmp(response.c_str() + tokens[i].start, blocks[3].c_str() + 2, tokens[i].end - tokens[i].start)==0)
-          break;
+      std::vector<std::string> jsonVals = split(blocks[3].c_str()+2, ';');
+
+      // Find HDCP limit
+      if (jsonVals.size() > 1)
+      {
+        for (; i < numTokens; ++i)
+          if (tokens[i].type == JSMN_STRING && tokens[i].size == 1 && jsonVals[1].size() == tokens[i].end - tokens[i].start
+            && strncmp(response.c_str() + tokens[i].start, jsonVals[1].c_str(), tokens[i].end - tokens[i].start) == 0)
+            break;
+        if (i < numTokens)
+          decrypter_caps_.hdcpLimit = atoi((response.c_str() + tokens[i + 1].start));
+      }
+      // Find license key
+      if (jsonVals.size() > 1)
+      {
+        for (i = 0; i < numTokens; ++i)
+          if (tokens[i].type == JSMN_STRING && tokens[i].size == 1 && jsonVals[0].size() == tokens[i].end - tokens[i].start
+            && strncmp(response.c_str() + tokens[i].start, jsonVals[0].c_str(), tokens[i].end - tokens[i].start) == 0)
+            break;
+      }
+      else
+        i = numTokens;
 
       if (i < numTokens)
       {
@@ -749,7 +784,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
     return AP4_SUCCESS;
   }
 
-  if(decrypter_caps_ & SSD_DECRYPTER::SSD_SECURE_PATH) //we can not decrypt only
+  if(decrypter_caps_.flags & SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH) //we can not decrypt only
   {
     if (nal_length_size_ > 4)
     {
@@ -1099,10 +1134,13 @@ public:
       return decrypter_->CloseSession(sessionHandle);
   }
 
-  virtual uint32_t GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
+  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
   {
     if (!decrypter_)
-      return 0;
+    {
+      static const SSD_DECRYPTER::SSD_CAPS dummy_caps = { 0,0,0 };
+      return dummy_caps;
+    }
 
     return decrypter_->GetCapabilities(sessionHandle, keyid);
   }
