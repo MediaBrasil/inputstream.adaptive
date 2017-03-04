@@ -46,8 +46,15 @@ CDM
 
 struct WVSession
 {
+  void ConvertSessionId()
+  {
+    memcpy(session_id_char, session_id.ptr, session_id.length);
+    session_id_char[session_id.length] = 0;
+  };
+
   std::string pssh;
   AMediaDrmByteArray session_id;
+  char session_id_char[128];
 
   const uint8_t *key_request;
   size_t key_request_size;
@@ -177,7 +184,8 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
   {
     for (auto s : sessions_)
     {
-      AMediaDrm_closeSession(media_drm_, &s->session_id);
+      //AMediaDrm_removeKeys(media_drm_, &s->session_id);
+      //AMediaDrm_closeSession(media_drm_, &s->session_id);
       delete s;
     }
     sessions_.clear();
@@ -188,7 +196,7 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
 
 const char *WV_CencSingleSampleDecrypter::GetSessionId(size_t sessionHandle)
 {
-  return reinterpret_cast<const char*>(sessions_.back()->session_id.ptr);
+  return sessions_.back()->session_id_char;
 }
 
 bool WV_CencSingleSampleDecrypter::ProvisionRequest()
@@ -310,6 +318,8 @@ TRYAGAIN:
     goto FAILWITHSESSION;
 
   Log(SSD_HOST::LL_DEBUG, "License update successful");
+
+  sessions_.back()->ConvertSessionId();
 
   return (size_t) sessions_.back();
 
@@ -592,14 +602,14 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
         for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
 
         //look if we have to inject sps / pps
-        if (annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
-        {
+        //if (annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
+        /*{
           memcpy(packet_out, annexb_sps_pps_.GetData(), annexb_sps_pps_.GetDataSize());
           packet_out += annexb_sps_pps_.GetDataSize();
           if (clrb_out) *clrb_out += annexb_sps_pps_.GetDataSize();
           configSize = annexb_sps_pps_.GetDataSize();
           annexb_sps_pps_.SetDataSize(0);
-        }
+        }*/
 
         //Anex-B Start pos
         packet_out[0] = packet_out[1] = packet_out[2] = 0; packet_out[3] = 1;
@@ -638,7 +648,10 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - nal_length_size_) * nalunitcount);
     }
     else
+    {
       data_out.AppendData(data_in.GetData(), data_in.GetDataSize());
+      annexb_sps_pps_.SetDataSize(0);
+    }
   }
   return AP4_SUCCESS;
 }
@@ -687,9 +700,9 @@ public:
       return decrypter_->CloseSession(sessionHandle);
   }
 
-  virtual const SSD::SSD_DECRYPTER::SSD_CAPS &GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
+  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
   {
-    static const SSD::SSD_DECRYPTER::SSD_CAPS dummy_caps = { SSD_SECURE_PATH | SSD_ANNEXB_REQUIRED, 0, 0 };
+    static const SSD_DECRYPTER::SSD_CAPS dummy_caps = { SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED, 0, 0 };
     return dummy_caps;
   }
 
