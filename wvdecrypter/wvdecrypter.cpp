@@ -439,6 +439,9 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(siz
 
   if (decrypter_caps_.flags == SSD_DECRYPTER::SSD_CAPS::SSD_SUPPORTS_DECODING)
   {
+    if (!key)
+      key = reinterpret_cast<const uint8_t*>(session->keys.front().keyid.data());
+
     key_ = key;
     key_size_ = 16;
 
