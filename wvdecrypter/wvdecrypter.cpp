@@ -422,11 +422,11 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(siz
   if (session->keys.empty())
     return decrypter_caps_;
 
-  if (decrypter_caps_.hdcpLimit)
+  /*if (decrypter_caps_.hdcpLimit)
   {
     decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
   }
-  else
+  else*/
   {
     for (auto k : session->keys)
       if (!key || memcmp(k.keyid.data(), key, 16) == 0)
@@ -446,6 +446,7 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(siz
     key_size_ = 16;
 
     decrypter_caps_.hdcpVersion = 99;
+    decrypter_caps_.hdcpLimit = 0;
 
     AP4_DataBuffer in, out;
     AP4_UI32 encb[2] = { 1,1 };
