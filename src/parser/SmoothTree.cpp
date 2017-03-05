@@ -165,6 +165,13 @@ start(void *data, const char *el, const char **attr)
       }
       dash->segcount_ = 0;
       dash->currentNode_ |= SmoothTree::SSMNODE_STREAMINDEX;
+
+      if (dash->encryptionState_)
+      {
+        AdaptiveTree::PSSH pssh;
+        pssh.streamType_ = dash->current_adaptationset_->type_;
+        dash->current_adaptationset_->pssh_set_ = dash->insert_psshset(pssh);
+      }
     }
     else if (strcmp(el, "Protection") == 0)
     {
@@ -194,7 +201,7 @@ start(void *data, const char *el, const char **attr)
       attr += 2;
     }
     if (timeScale)
-      dash->overallSeconds_ = (double)duration / timeScale;
+      dash->overallSeconds_ = duration / timeScale;
     dash->currentNode_ |= SmoothTree::SSMNODE_SSM;
     dash->minPresentationOffset = DBL_MAX;
     dash->base_time_ = ~0ULL;
@@ -233,6 +240,7 @@ end(void *data, const char *el)
       else if (strcmp(el, "Protection") == 0)
       {
         dash->currentNode_ &= ~(SmoothTree::SSMNODE_PROTECTION| SmoothTree::SSMNODE_PROTECTIONTEXT);
+        dash->psshSets_.push_back(AdaptiveTree::PSSH());
         dash->parse_protection();
       }
     }
@@ -283,18 +291,18 @@ static void XMLCALL
 protection_end(void *data, const char *el)
 {
 	SmoothTree *dash(reinterpret_cast<SmoothTree*>(data));
-    if (strcmp(el, "KID") == 0)
-    {
-      uint8_t buffer[32];
-      unsigned int buffer_size(32);
-      b64_decode(dash->strXMLText_.data(), dash->strXMLText_.size(), buffer, buffer_size);
+  if (strcmp(el, "KID") == 0)
+  {
+    uint8_t buffer[32];
+    unsigned int buffer_size(32);
+    b64_decode(dash->strXMLText_.data(), dash->strXMLText_.size(), buffer, buffer_size);
 
-      if (buffer_size == 16)
-      {
-        dash->defaultKID_.resize(16);
-        prkid2wvkid(reinterpret_cast<const char *>(buffer), &dash->defaultKID_[0]);
-      }
+    if (buffer_size == 16)
+    {
+      dash->adp_defaultKID_.resize(16);
+      prkid2wvkid(reinterpret_cast<const char *>(buffer), &dash->adp_defaultKID_[0]);
     }
+  }
 }
 
 /*----------------------------------------------------------------------
