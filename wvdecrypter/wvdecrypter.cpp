@@ -893,12 +893,21 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
   // the output has the same size as the input
   data_out.SetDataSize(data_in.GetDataSize());
 
+  uint16_t clearb(0);
+  uint32_t cipherb(data_in.GetDataSize());
+
   // check input parameters
   if (iv == NULL) return AP4_ERROR_INVALID_PARAMETERS;
   if (subsample_count) {
     if (bytes_of_cleartext_data == NULL || bytes_of_encrypted_data == NULL) {
       return AP4_ERROR_INVALID_PARAMETERS;
     }
+  }
+  else
+  {
+    subsample_count = 1;
+    bytes_of_cleartext_data = &clearb;
+    bytes_of_encrypted_data = &cipherb;
   }
 
   // transform ap4 format into cmd format
@@ -909,7 +918,9 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
     max_subsample_count_ = subsample_count;
   }
 
-  if (use_single_decrypt_)
+  bool useSingleDecrypt(false);
+
+  if (use_single_decrypt_ && subsample_count > 1)
   {
     decrypt_in_.Reserve(data_in.GetDataSize());
     decrypt_in_.SetDataSize(0);
@@ -921,38 +932,53 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       decrypt_in_.AppendData(data_in.GetData() + absPos, bytes_of_encrypted_data[i]);
       absPos += bytes_of_encrypted_data[i];
     }
-    decrypt_out_.SetDataSize(decrypt_in_.GetDataSize());
-    subsample_buffer_[0].clear_bytes = 0;
-    subsample_buffer_[0].cipher_bytes = decrypt_in_.GetDataSize();
-    cdm_in.data = decrypt_in_.GetData();
-    cdm_in.data_size = decrypt_in_.GetDataSize();
-    cdm_in.num_subsamples = 1;
+    if (decrypt_in_.GetDataSize())
+    {
+      decrypt_out_.SetDataSize(decrypt_in_.GetDataSize());
+      subsample_buffer_[0].clear_bytes = 0;
+      subsample_buffer_[0].cipher_bytes = decrypt_in_.GetDataSize();
+      cdm_in.data = decrypt_in_.GetData();
+      cdm_in.data_size = decrypt_in_.GetDataSize();
+      cdm_in.num_subsamples = 1;
+      useSingleDecrypt = true;
+    }
   }
-  else
+
+  if (!useSingleDecrypt)
   {
-    unsigned int i(0);
+    unsigned int i(0), numCipherBytes(0);
     for (cdm::SubsampleEntry *b(subsample_buffer_), *e(subsample_buffer_ + subsample_count); b != e; ++b, ++i)
     {
       b->clear_bytes = bytes_of_cleartext_data[i];
       b->cipher_bytes = bytes_of_encrypted_data[i];
+      numCipherBytes += b->cipher_bytes;
     }
-    cdm_in.data = data_in.GetData();
-    cdm_in.data_size = data_in.GetDataSize();
-    cdm_in.num_subsamples = subsample_count;
+    if (numCipherBytes)
+    {
+      cdm_in.data = data_in.GetData();
+      cdm_in.data_size = data_in.GetDataSize();
+      cdm_in.num_subsamples = subsample_count;
+    }
+    else
+    {
+      memcpy(data_out.UseData(), data_in.GetData(), data_in.GetDataSize());
+      return AP4_SUCCESS;
+    }
   }
+
   cdm_in.iv = iv;
   cdm_in.iv_size = 16; //Always 16, see AP4_CencSingleSampleDecrypter declaration.
   cdm_in.key_id = key_;
   cdm_in.key_id_size = key_size_;
   cdm_in.subsamples = subsample_buffer_;
 
-  CdmBuffer buf(use_single_decrypt_ ? &decrypt_out_ : &data_out);
+  CdmBuffer buf((useSingleDecrypt) ? &decrypt_out_ : &data_out);
   CdmDecryptedBlock cdm_out;
   cdm_out.SetDecryptedBuffer(&buf);
 
   cdm::Status ret = wv_adapter->Decrypt(cdm_in, &cdm_out);
 
-  if (ret == cdm::Status::kSuccess && use_single_decrypt_)
+  if (ret == cdm::Status::kSuccess && useSingleDecrypt)
   {
     size_t absPos = 0, cipherPos = 0;
     for (unsigned int i(0); i < subsample_count; ++i)
