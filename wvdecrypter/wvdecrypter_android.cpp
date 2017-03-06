@@ -68,7 +68,8 @@ private:
 };
 
 WV_DRM::WV_DRM(const char* licenseURL, const AP4_DataBuffer &serverCert)
-  : license_url_(licenseURL)
+  : media_drm_(0)
+  , license_url_(licenseURL)
 {
   std::string strBasePath = host->GetProfilePath();
   char cSep = strBasePath.back();
@@ -582,7 +583,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(AP4_UI32 pool_id,
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
-      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(fragInfo.key_id_), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(fragInfo.key_), 16);
     }
     else
     {
