@@ -44,91 +44,32 @@ static void Log(SSD_HOST::LOGLEVEL loglevel, const char *format, ...)
 CDM
 ********************************************************/
 
-struct WVSession
-{
-  void ConvertSessionId()
-  {
-    memcpy(session_id_char, session_id.ptr, session_id.length);
-    session_id_char[session_id.length] = 0;
-  };
-
-  std::string pssh;
-  AMediaDrmByteArray session_id;
-  char session_id_char[128];
-
-  const uint8_t *key_request;
-  size_t key_request_size;
-};
-
-/*----------------------------------------------------------------------
-|   WV_CencSingleSampleDecrypter
-+---------------------------------------------------------------------*/
-class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter
-{
-public:
-  // methods
-  WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &serverCertificate);
-  ~WV_CencSingleSampleDecrypter();
-
-  size_t CreateSession(AP4_DataBuffer &pssh);
-  void CloseSession(size_t sessionhandle);
-  const char *GetSessionId(size_t sessionHandle);
-
-  bool initialized()const { return media_drm_ != 0; };
-
-  virtual AP4_Result SetFrameInfo(const AP4_UI16 key_size, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps) override;
-
-  virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
-    AP4_DataBuffer& data_out,
-
-    // always 16 bytes
-    const AP4_UI08* iv,
-
-    // pass 0 for full decryption
-    unsigned int    subsample_count,
-
-    // array of <subsample_count> integers. NULL if subsample_count is 0
-    const AP4_UI16* bytes_of_cleartext_data,
-
-    // array of <subsample_count> integers. NULL if subsample_count is 0
-    const AP4_UI32* bytes_of_encrypted_data);
-
-private:
-  bool ProvisionRequest();
-  bool SendSessionMessage(AMediaDrmByteArray &session_id, const uint8_t* key_request, size_t key_request_size);
-
-  AMediaDrm *media_drm_;
-  std::vector<WVSession*> sessions_;
-
-  std::string license_url_;
-  AP4_UI16 key_size_;
-  uint8_t key_[32];
-  AP4_UI08 nal_length_size_;
-  AP4_DataBuffer annexb_sps_pps_;
-};
-
 bool needProvision = false;
 
 void MediaDrmEventListener(AMediaDrm *media_drm, const AMediaDrmSessionId *sessionId, AMediaDrmEventType eventType, int extra, const uint8_t *data, size_t dataSize)
 {
   Log(SSD_HOST::LL_DEBUG, "EVENT occured drm:%x, event:%d extra:%d dataSize;%d", (unsigned int)media_drm, eventType, extra, dataSize);
-  if (eventType == EVENT_PROVISION_REQUIRED )
+  if (eventType == EVENT_PROVISION_REQUIRED)
     needProvision = true;
-
 }
 
-/*----------------------------------------------------------------------
-|   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
-+---------------------------------------------------------------------*/
-
-WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseURL, AP4_DataBuffer &serverCertificate)
-  : AP4_CencSingleSampleDecrypter(0)
-  , media_drm_(0)
-  , license_url_(licenseURL)
-  , nal_length_size_(0)
+class WV_DRM
 {
-  SetParentIsOwner(false);
+public:
+  WV_DRM(const char* licenseURL, const AP4_DataBuffer &serverCert);
+  ~WV_DRM();
 
+  AMediaDrm *GetMediaDrm() { return media_drm_; };
+  const std::string &GetLicenseURL() { return license_url_; };
+
+private:
+  AMediaDrm *media_drm_;
+  std::string license_url_;
+};
+
+WV_DRM::WV_DRM(const char* licenseURL, const AP4_DataBuffer &serverCert)
+  : license_url_(licenseURL)
+{
   std::string strBasePath = host->GetProfilePath();
   char cSep = strBasePath.back();
   strBasePath += "widevine";
@@ -139,12 +80,12 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
   const char* bspos(strchr(license_url_.c_str(), ':'));
   if (!bspos || bspos[1] != '/' || bspos[2] != '/' || !(bspos = strchr(bspos + 3, '/')))
   {
-    Log(SSD_HOST::LL_ERROR, "Could not find protocol inside url - invalid");
+    Log(SSD_HOST::LL_ERROR, "Unable to find protocol inside license url - invalid");
     return;
   }
   if (bspos - license_url_.c_str() > 256)
   {
-    Log(SSD_HOST::LL_ERROR, "Length of domain exeeds max. size of 256 - invalid");
+    Log(SSD_HOST::LL_ERROR, "Length of license URL exeeds max. size of 256 - invalid");
     return;
   }
   char buffer[1024];
@@ -178,6 +119,157 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(std::string licenseUR
     license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=false|JBlicense";
 }
 
+WV_DRM::~WV_DRM()
+{
+  if (media_drm_)
+  {
+    AMediaDrm_release(media_drm_);
+    media_drm_ = 0;
+  }
+}
+
+/*----------------------------------------------------------------------
+|   WV_CencSingleSampleDecrypter
++---------------------------------------------------------------------*/
+class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter
+{
+public:
+  // methods
+  WV_CencSingleSampleDecrypter(WV_DRM &drm);
+  ~WV_CencSingleSampleDecrypter();
+
+  size_t CreateSession(AP4_DataBuffer &pssh);
+  void CloseSession(size_t sessionhandle);
+  const char *GetSessionId(size_t sessionHandle);
+
+  bool initialized()const { return media_drm_ != 0; };
+
+  virtual AP4_Result SetFrameInfo(const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps) override;
+
+  virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
+    AP4_DataBuffer& data_out,
+
+    // always 16 bytes
+    const AP4_UI08* iv,
+
+    // pass 0 for full decryption
+    unsigned int    subsample_count,
+
+    // array of <subsample_count> integers. NULL if subsample_count is 0
+    const AP4_UI16* bytes_of_cleartext_data,
+
+    // array of <subsample_count> integers. NULL if subsample_count is 0
+    const AP4_UI32* bytes_of_encrypted_data);
+
+private:
+  bool ProvisionRequest();
+  bool SendSessionMessage(AMediaDrmByteArray &session_id, const uint8_t* key_request, size_t key_request_size);
+
+  WV_DRM *media_drm_;
+  std::string pssh_;
+
+  AMediaDrmByteArray session_id_;
+  char session_id_char_[128];
+
+  const uint8_t *key_request_;
+  size_t key_request_size_;
+
+  uint8_t *keyId_;
+  AP4_UI08 nal_length_size_;
+  AP4_DataBuffer annexb_sps_pps_;
+};
+
+
+/*----------------------------------------------------------------------
+|   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
++---------------------------------------------------------------------*/
+
+WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh)
+  : AP4_CencSingleSampleDecrypter(0)
+  , media_drm_(drm)
+  , license_url_(licenseURL)
+  , key_request_(nullptr)
+  , key_request_size_(0)
+  , keyId_(nullptr)
+  , nal_length_size_(0)
+{
+  SetParentIsOwner(false);
+
+  if (pssh.GetDataSize() > 256)
+  {
+    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
+    return 0;
+  }
+
+#ifdef _DEBUG
+  std::string strDbg = host->GetProfilePath();
+  strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.init";
+  FILE*f = fopen(strDbg.c_str(), "wb");
+  fwrite(pssh.GetData(), 1, pssh.GetDataSize(), f);
+  fclose(f);
+#endif
+
+  pssh_ = std::string((const char*)pssh.GetData(), pssh.GetDataSize());
+
+  if (memcmp(pssh.GetData() + 4, "pssh", 4) != 0)
+  {
+    static const uint8_t atom[] = { 0x00, 0x00, 0x00, 0x00, 0x70, 0x73, 0x73, 0x68, 0x00, 0x00, 0x00, 0x00, 0xed, 0xef, 0x8b, 0xa9,
+      0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed, 0x00, 0x00, 0x00, 0x00 };
+
+    pssh_.insert(0, std::string(reinterpret_cast<const char*>(atom), sizeof(atom)));
+
+    pssh_[3] = static_cast<uint8_t>(pssh_.size());
+    pssh_[sizeof(atom) - 1] = static_cast<uint8_t>(pssh_.size()) - sizeof(atom);
+  }
+
+  media_status_t status;
+
+  memset(&session_id_, 0, sizeof(session_id_));
+  if ((status = AMediaDrm_openSession(media_drm_.GetMediaDrm(), &session_id_)) != AMEDIA_OK)
+  {
+    Log(SSD_HOST::LL_ERROR, "Unable to open DRM session (%d)", status);
+    return;
+  }
+
+TRYAGAIN:
+  if (needProvision && !ProvisionRequest())
+  {
+    Log(SSD_HOST::LL_ERROR, "Unable to generate a license (provision failed)");
+    goto FAILWITHSESSION;
+  }
+  needProvision = false;
+
+  status = AMediaDrm_getKeyRequest(media_drm_.GetMediaDrm(), &session_id,
+    reinterpret_cast<const uint8_t*>(pssh_.data()), pssh_.size(),
+    "video/mp4", KEY_TYPE_STREAMING, 0, 0, &key_request_, &key_request_size_);
+
+  if (status != AMEDIA_OK || !key_request_size_)
+  {
+    Log(SSD_HOST::LL_ERROR, "Key request not successful (%d)", status);
+    if (needProvision)
+      goto TRYAGAIN;
+    else
+      goto FAILWITHSESSION;
+  }
+
+  Log(SSD_HOST::LL_DEBUG, "Key request successful, size: %u", reinterpret_cast<unsigned int>(key_request_size_));
+
+  if (!SendSessionMessage(session_id_, key_request_, key_request_size_))
+    goto FAILWITHSESSION;
+
+  Log(SSD_HOST::LL_DEBUG, "License update successful");
+
+  memcpy(session_id_char_, session_id_.ptr, session_id_.length);
+  session_id_char_[session_id_.length] = 0;
+
+FAILWITHSESSION:
+  AMediaDrm_closeSession(media_drm_.GetMediaDrm(), &session_id);
+  memset(&session_id, 0, sizeof(session_id));
+
+
+  return 0;
+}
+
 WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
 {
   if (media_drm_)
@@ -196,7 +288,7 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
 
 const char *WV_CencSingleSampleDecrypter::GetSessionId(size_t sessionHandle)
 {
-  return sessions_.back()->session_id_char;
+  return session_id_char;
 }
 
 bool WV_CencSingleSampleDecrypter::ProvisionRequest()
@@ -247,89 +339,6 @@ bool WV_CencSingleSampleDecrypter::ProvisionRequest()
 
 size_t WV_CencSingleSampleDecrypter::CreateSession(AP4_DataBuffer &pssh)
 {
-  if (pssh.GetDataSize() > 256)
-  {
-    Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
-    return 0;
-  }
-
-#ifdef _DEBUG
-  std::string strDbg = host->GetProfilePath();
-  strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.init";
-  FILE*f = fopen(strDbg.c_str(), "wb");
-  fwrite(pssh.GetData(), 1, pssh.GetDataSize(), f);
-  fclose(f);
-#endif
-
-  sessions_.push_back(new WVSession);
-  sessions_.back()->pssh = std::string((const char*)pssh.GetData(), pssh.GetDataSize());
-
-  if (memcmp(pssh.GetData()+4, "pssh", 4) != 0)
-  {
-    std::string &psshref(sessions_.back()->pssh);
-
-    static const uint8_t atom[] = { 0x00, 0x00, 0x00, 0x00, 0x70, 0x73, 0x73, 0x68, 0x00, 0x00, 0x00, 0x00, 0xed, 0xef, 0x8b, 0xa9,
-      0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed, 0x00, 0x00, 0x00, 0x00 };
-
-    psshref.insert(0, std::string(reinterpret_cast<const char*>(atom), sizeof(atom)));
-
-    psshref[3] = static_cast<uint8_t>(psshref.size());
-    psshref[sizeof(atom) - 1] = static_cast<uint8_t>(psshref.size()) - sizeof(atom);
-  }
-
-  media_status_t status;
-
-  memset(&sessions_.back()->session_id, 0, sizeof(sessions_.back()->session_id));
-  if ((status = AMediaDrm_openSession(media_drm_, &sessions_.back()->session_id)) != AMEDIA_OK)
-  {
-    Log(SSD_HOST::LL_ERROR, "Unable to open DRM session (%d)", status);
-
-    delete sessions_.back(), sessions_.pop_back();
-
-    AMediaDrm_release(media_drm_);
-    media_drm_ = 0;
-    return 0;
-  }
-
-TRYAGAIN:
-  if (needProvision && !ProvisionRequest())
-  {
-    Log(SSD_HOST::LL_ERROR, "Unable to generate a license (provision failed)");
-    goto FAILWITHSESSION;
-  }
-  needProvision = false;
-
-  status = AMediaDrm_getKeyRequest(media_drm_, &sessions_.back()->session_id,
-    reinterpret_cast<const uint8_t*>(sessions_.back()->pssh.data()), sessions_.back()->pssh.size(),
-    "video/mp4", KEY_TYPE_STREAMING, 0, 0, &sessions_.back()->key_request, &sessions_.back()->key_request_size);
-
-  if (status != AMEDIA_OK || !sessions_.back()->key_request_size)
-  {
-    Log(SSD_HOST::LL_ERROR, "Key request not successful (%d)", status);
-    if (needProvision)
-      goto TRYAGAIN;
-    else
-      goto FAILWITHSESSION;
-  }
-
-  Log(SSD_HOST::LL_DEBUG, "Key request successful, size: %u", reinterpret_cast<unsigned int>(sessions_.back()->key_request_size));
-
-  if (!SendSessionMessage(sessions_.back()->session_id, sessions_.back()->key_request, sessions_.back()->key_request_size))
-    goto FAILWITHSESSION;
-
-  Log(SSD_HOST::LL_DEBUG, "License update successful");
-
-  sessions_.back()->ConvertSessionId();
-
-  return (size_t) sessions_.back();
-
-FAILWITHSESSION:
-  AMediaDrm_closeSession(media_drm_, &sessions_.back()->session_id);
-  delete sessions_.back(), sessions_.pop_back();
-
-  AMediaDrm_release(media_drm_);
-  media_drm_ = 0;
-  return 0;
 }
 
 void WV_CencSingleSampleDecrypter::CloseSession(size_t sessionhandle)
@@ -659,62 +668,50 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
 class WVDecrypter : public SSD_DECRYPTER
 {
 public:
-  WVDecrypter() :decrypter_(nullptr) {};
+  WVDecrypter() : cdmsession_(nullptr) {};
   ~WVDecrypter()
   {
-    delete decrypter_;
-    decrypter_ = nullptr;
+    delete cdmsession_;
+    cdmsession_ = nullptr;
   };
 
-  // Return supported URN if type matches to capabikitues, otherwise null
-  virtual const char *Supported(const char* licenseType, const char *licenseKey) override
+  virtual const char *OpenDRMSystem(const char* keySystem, const char *licenseURL, const AP4_DataBuffer &serverCertificate)
   {
-    licenseKey_ = licenseKey;
-    if (strcmp(licenseType, "com.widevine.alpha") == 0)
-      return "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
-    return 0;
-  };
+    if (strcmp(keySystem, "com.widevine.alpha"))
+      return nullptr;
 
-  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &serverCertificate) override
+    cdmsession_ = new WV_DRM(licenseURL, serverCertificate);
+
+    if (!cdmsession_->GetMediaDrm())
+      return nullptr;
+
+    return "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
+  }
+
+  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh) override
   {
-    decrypter_ = new WV_CencSingleSampleDecrypter(licenseKey_, serverCertificate);
-    if (!decrypter_->initialized())
+    WV_CencSingleSampleDecrypter *decrypter = new WV_CencSingleSampleDecrypter(*cdmsession_, pssh);
+    if (!decrypter->GetSessionId())
     {
-      delete decrypter_;
-      decrypter_ = 0;
+      delete decrypter;
+      decrypter = nullptr;
     }
-    return decrypter_;
+    return decrypter;
   }
 
-  virtual size_t CreateSession(AP4_DataBuffer &streamCodec) override
+  virtual void DestroySingleSampleDecrypter(AP4_CencSingleSampleDecrypter* decrypter) override
   {
-    if (!decrypter_)
-      return 0;
-
-    return decrypter_->CreateSession(streamCodec);
+    if (decrypter)
+      delete static_cast<WV_CencSingleSampleDecrypter*>(decrypter);
   }
 
-  virtual void CloseSession(size_t sessionHandle) override
-  {
-    if (!decrypter_)
-      return decrypter_->CloseSession(sessionHandle);
-  }
-
-  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(size_t sessionHandle, const uint8_t *keyid) override
+  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(AP4_CencSingleSampleDecrypter* decrypter, const uint8_t *keyid) override
   {
     static const SSD_DECRYPTER::SSD_CAPS dummy_caps = { SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED, 0, 0 };
     return dummy_caps;
   }
 
-  virtual const char *GetSessionId(size_t sessionHandle) override
-  {
-    if (!decrypter_)
-      return false;
-
-    return decrypter_->GetSessionId(sessionHandle);
-  }
-
-  virtual bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData)
+  virtual bool OpenVideoDecoder(AP4_CencSingleSampleDecrypter* decrypter, const SSD_VIDEOINITDATA *initData)
   {
     return false;
   }
@@ -729,8 +726,7 @@ public:
   }
 
 private:
-  std::string licenseKey_;
-  WV_CencSingleSampleDecrypter *decrypter_;
+  WV_DRM *cdmsession_;
 };
 
 extern "C" {
