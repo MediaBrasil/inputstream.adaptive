@@ -239,9 +239,13 @@ public:
     keys_.back().status = static_cast<cdm::KeyStatus>(status);
   }
 
-  virtual AP4_Result SetFrameInfo(const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)override;
+  virtual AP4_Result SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)override;
+  virtual AP4_UI32 AddPool() override;
+  virtual void RemovePool(AP4_UI32 poolid) override;
 
-  virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
+
+  virtual AP4_Result DecryptSampleData(AP4_UI32 pool_id,
+    AP4_DataBuffer& data_in,
     AP4_DataBuffer& data_out,
 
     // always 16 bytes
@@ -254,7 +258,7 @@ public:
     const AP4_UI16* bytes_of_cleartext_data,
 
     // array of <subsample_count> integers. NULL if subsample_count is 0
-    const AP4_UI32* bytes_of_encrypted_data);
+    const AP4_UI32* bytes_of_encrypted_data) override;
 
   bool OpenVideoDecoder(const SSD_VIDEOINITDATA *initData);
   SSD_DECODE_RETVAL DecodeVideo(void* hostInstance, SSD_SAMPLE *sample, SSD_PICTURE *picture);
@@ -277,11 +281,15 @@ private:
   cdm::SubsampleEntry *subsample_buffer_;
   AP4_DataBuffer decrypt_in_, decrypt_out_;
   bool use_single_decrypt_;
-
-  const AP4_UI08 *key_;
-  AP4_UI08 nal_length_size_;
-  AP4_DataBuffer annexb_sps_pps_;
   SSD_DECRYPTER::SSD_CAPS decrypter_caps_;
+
+  struct FINFO
+  {
+    const AP4_UI08 *key_;
+    AP4_UI08 nal_length_size_;
+    AP4_DataBuffer annexb_sps_pps_;
+  };
+  std::vector<FINFO> fragment_pool_;
 
   uint32_t promise_id_;
 
@@ -432,8 +440,6 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   , max_subsample_count_(0)
   , subsample_buffer_(0)
   , use_single_decrypt_(false)
-  , key_(0)
-  , nal_length_size_(0)
   , promise_id_(0)
 {
   memset(&decrypter_caps_, 0, sizeof(decrypter_caps_));
@@ -533,10 +539,8 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(con
 
   if (decrypter_caps_.flags == SSD_DECRYPTER::SSD_CAPS::SSD_SUPPORTS_DECODING)
   {
-    if (!key)
-      key = reinterpret_cast<const uint8_t*>(keys_.front().keyid.data());
-
-    key_ = key;
+    AP4_UI32 poolid(AddPool());
+    fragment_pool_[poolid].key_ = key ? key : reinterpret_cast<const uint8_t*>(keys_.front().keyid.data());
 
     decrypter_caps_.hdcpVersion = 99;
     decrypter_caps_.hdcpLimit = 0;
@@ -549,11 +553,11 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(con
     in.SetBuffer(vf,12);
     in.SetDataSize(12);
     try {
-      if (DecryptSampleData(in, out, iv, 2, clearb, encb) != AP4_SUCCESS)
+      if (DecryptSampleData(poolid, in, out, iv, 2, clearb, encb) != AP4_SUCCESS)
       {
         encb[0] = 12;
         clearb[0] = 0;
-        if (DecryptSampleData(in, out, iv, 1, clearb, encb) != AP4_SUCCESS)
+        if (DecryptSampleData(poolid, in, out, iv, 1, clearb, encb) != AP4_SUCCESS)
           decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
         else
         {
@@ -564,7 +568,7 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(con
     catch (...) {
       decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
     }
-    key_ = nullptr;
+    RemovePool(poolid);
   }
   return decrypter_caps_;
 }
@@ -776,20 +780,42 @@ SSMFAIL:
 |   WV_CencSingleSampleDecrypter::SetKeyId
 +---------------------------------------------------------------------*/
 
-AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)
+AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)
 {
-  key_ = key;
-  nal_length_size_ = nal_length_size;
-  annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
+  if (pool_id >= fragment_pool_.size())
+    return AP4_ERROR_OUT_OF_RANGE;
+
+  fragment_pool_[pool_id].key_ = key;
+  fragment_pool_[pool_id].nal_length_size_ = nal_length_size;
+  fragment_pool_[pool_id].annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
 
   return AP4_SUCCESS;
 }
 
+AP4_UI32 WV_CencSingleSampleDecrypter::AddPool()
+{
+  for (size_t i(0); i < fragment_pool_.size(); ++i)
+    if (fragment_pool_[i].nal_length_size_ == 99)
+    {
+      fragment_pool_[i].nal_length_size_ = 0;
+      return i;
+    }
+  fragment_pool_.push_back(FINFO());
+  fragment_pool_.back().nal_length_size_ = 0;
+  return static_cast<AP4_UI32>(fragment_pool_.size() - 1);
+}
+
+
+void WV_CencSingleSampleDecrypter::RemovePool(AP4_UI32 poolid)
+{
+  fragment_pool_[poolid].nal_length_size_ = 99;
+  fragment_pool_[poolid].key_ = nullptr;
+}
 
 /*----------------------------------------------------------------------
 |   WV_CencSingleSampleDecrypter::DecryptSampleData
 +---------------------------------------------------------------------*/
-AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
+AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(AP4_UI32 pool_id,
   AP4_DataBuffer& data_in,
   AP4_DataBuffer& data_out,
   const AP4_UI08* iv,
@@ -803,9 +829,11 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
     return AP4_SUCCESS;
   }
 
+  FINFO &fragInfo(fragment_pool_[pool_id]);
+
   if(decrypter_caps_.flags & SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH) //we can not decrypt only
   {
-    if (nal_length_size_ > 4)
+    if (fragInfo.nal_length_size_ > 4)
     {
       Log(SSD_HOST::LL_ERROR, "Nalu length size > 4 not supported");
       return AP4_ERROR_NOT_SUPPORTED;
@@ -827,7 +855,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
-      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(fragInfo.key_), 16);
     }
     else
     {
@@ -836,7 +864,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       bytes_of_encrypted_data = &dummyCipher;
     }
 
-    if (nal_length_size_ && (!iv || bytes_of_cleartext_data[0] > 0))
+    if (fragInfo.nal_length_size_ && (!iv || bytes_of_cleartext_data[0] > 0))
     {
       //Note that we assume that there is enough data in data_out to hold everything without reallocating.
 
@@ -849,16 +877,16 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       while (packet_in < packet_in_e)
       {
         uint32_t nalsize(0);
-        for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
+        for (unsigned int i(0); i < fragInfo.nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
 
         //look if we have to inject sps / pps
-        if (annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
+        if (fragInfo.annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
         {
-          memcpy(packet_out, annexb_sps_pps_.GetData(), annexb_sps_pps_.GetDataSize());
-          packet_out += annexb_sps_pps_.GetDataSize();
-          if(clrb_out) *clrb_out += annexb_sps_pps_.GetDataSize();
-          configSize = annexb_sps_pps_.GetDataSize();
-          annexb_sps_pps_.SetDataSize(0);
+          memcpy(packet_out, fragInfo.annexb_sps_pps_.GetData(), fragInfo.annexb_sps_pps_.GetDataSize());
+          packet_out += fragInfo.annexb_sps_pps_.GetDataSize();
+          if(clrb_out) *clrb_out += fragInfo.annexb_sps_pps_.GetDataSize();
+          configSize = fragInfo.annexb_sps_pps_.GetDataSize();
+          fragInfo.annexb_sps_pps_.SetDataSize(0);
         }
 
         //Anex-B Start pos
@@ -867,19 +895,19 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
         memcpy(packet_out, packet_in, nalsize);
         packet_in += nalsize;
         packet_out += nalsize;
-        if (clrb_out) *clrb_out += (4 - nal_length_size_);
+        if (clrb_out) *clrb_out += (4 - fragInfo.nal_length_size_);
         ++nalunitcount;
 
-        if (nalsize + nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        if (nalsize + fragInfo.nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
         {
-          Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", nal_length_size_, nalsize + nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
+          Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", fragInfo.nal_length_size_, nalsize + fragInfo.nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
           return AP4_ERROR_NOT_SUPPORTED;
         }
         else if (!iv)
         {
           nalunitsum = 0;
         }
-        else if (nalsize + nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        else if (nalsize + fragInfo.nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
         {
           ++bytes_of_cleartext_data;
           ++bytes_of_encrypted_data;
@@ -888,21 +916,21 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
           nalunitsum = 0;
         }
         else
-          nalunitsum += nalsize + nal_length_size_;
+          nalunitsum += nalsize + fragInfo.nal_length_size_;
       }
       if (packet_in != packet_in_e || subsample_count)
       {
-        Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
+        Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", fragInfo.nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
         return AP4_ERROR_NOT_SUPPORTED;
       }
-      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - nal_length_size_) * nalunitcount);
+      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - fragInfo.nal_length_size_) * nalunitcount);
     }
     else
       data_out.AppendData(data_in.GetData(), data_in.GetDataSize());
     return AP4_SUCCESS;
   }
 
-  if (!key_)
+  if (!fragInfo.key_)
     return AP4_ERROR_INVALID_PARAMETERS;
 
   // the output has the same size as the input
@@ -983,7 +1011,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
 
   cdm_in.iv = iv;
   cdm_in.iv_size = 16; //Always 16, see AP4_CencSingleSampleDecrypter declaration.
-  cdm_in.key_id = key_;
+  cdm_in.key_id = fragInfo.key_;
   cdm_in.key_id_size = 16;
   cdm_in.subsamples = subsample_buffer_;
 

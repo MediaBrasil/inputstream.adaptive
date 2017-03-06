@@ -142,9 +142,12 @@ public:
   void CloseSession(size_t sessionhandle);
   virtual const char *GetSessionId() override;
 
-  virtual AP4_Result SetFrameInfo(const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps) override;
+  virtual AP4_Result SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)override;
+  virtual AP4_UI32 AddPool() override;
+  virtual void RemovePool(AP4_UI32 poolid) override;
 
-  virtual AP4_Result DecryptSampleData(AP4_DataBuffer& data_in,
+  virtual AP4_Result DecryptSampleData(AP4_UI32 pool_id,
+    AP4_DataBuffer& data_in,
     AP4_DataBuffer& data_out,
 
     // always 16 bytes
@@ -172,9 +175,13 @@ private:
   const uint8_t *key_request_;
   size_t key_request_size_;
 
-  const uint8_t *key_id_;
-  AP4_UI08 nal_length_size_;
-  AP4_DataBuffer annexb_sps_pps_;
+  struct FINFO
+  {
+    const AP4_UI08 *key_;
+    AP4_UI08 nal_length_size_;
+    AP4_DataBuffer annexb_sps_pps_;
+  };
+  std::vector<FINFO> fragment_pool_;
 };
 
 
@@ -187,8 +194,6 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   , media_drm_(drm)
   , key_request_(nullptr)
   , key_request_size_(0)
-  , key_id_(nullptr)
-  , nal_length_size_(0)
 {
   SetParentIsOwner(false);
 
@@ -505,20 +510,42 @@ SSMFAIL:
 |   WV_CencSingleSampleDecrypter::SetKeyId
 +---------------------------------------------------------------------*/
 
-AP4_Result WV_CencSingleSampleDecrypter::SetFrameInfo(const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)
+AP4_Result WV_CencSingleSampleDecrypter::SetFragmentInfo(AP4_UI32 pool_id, const AP4_UI08 *key, const AP4_UI08 nal_length_size, AP4_DataBuffer &annexb_sps_pps)
 {
-  key_id_ = key;
-  nal_length_size_ = nal_length_size;
+  if (pool_id >= fragment_pool_.size())
+    return AP4_ERROR_OUT_OF_RANGE;
 
-  annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
+  fragment_pool_[pool_id].key_ = key;
+  fragment_pool_[pool_id].nal_length_size_ = nal_length_size;
+  fragment_pool_[pool_id].annexb_sps_pps_.SetData(annexb_sps_pps.GetData(), annexb_sps_pps.GetDataSize());
 
   return AP4_SUCCESS;
+}
+
+AP4_UI32 WV_CencSingleSampleDecrypter::AddPool()
+{
+  for (size_t i(0); i < fragment_pool_.size(); ++i)
+    if (fragment_pool_[i].nal_length_size_ == 99)
+    {
+      fragment_pool_[i].nal_length_size_ = 0;
+      return i;
+    }
+  fragment_pool_.push_back(FINFO());
+  fragment_pool_.back().nal_length_size_ = 0;
+  return static_cast<AP4_UI32>(fragment_pool_.size() - 1);
+}
+
+
+void WV_CencSingleSampleDecrypter::RemovePool(AP4_UI32 poolid)
+{
+  fragment_pool_[poolid].nal_length_size_ = 99;
+  fragment_pool_[poolid].key_ = nullptr;
 }
 
 /*----------------------------------------------------------------------
 |   WV_CencSingleSampleDecrypter::DecryptSampleData
 +---------------------------------------------------------------------*/
-AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
+AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(AP4_UI32 pool_id,
   AP4_DataBuffer& data_in,
   AP4_DataBuffer& data_out,
   const AP4_UI08* iv,
@@ -531,7 +558,9 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
 
   if (data_in.GetDataSize() > 0)
   {
-    if (nal_length_size_ > 4)
+    FINFO &fragInfo(fragment_pool_[pool_id]);
+
+    if (fragInfo.nal_length_size_ > 4)
     {
       Log(SSD_HOST::LL_ERROR, "Nalu length size > 4 not supported");
       return AP4_ERROR_NOT_SUPPORTED;
@@ -553,7 +582,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_cleartext_data), subsample_count * sizeof(AP4_UI16));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(bytes_of_encrypted_data), subsample_count * sizeof(AP4_UI32));
       data_out.AppendData(reinterpret_cast<const AP4_Byte*>(iv), 16);
-      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(key_id_), 16);
+      data_out.AppendData(reinterpret_cast<const AP4_Byte*>(fragInfo.key_id_), 16);
     }
     else
     {
@@ -562,7 +591,7 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       bytes_of_encrypted_data = &dummyCipher;
     }
 
-    if (nal_length_size_ && (!iv || bytes_of_cleartext_data[0] > 0))
+    if (fragInfo.nal_length_size_ && (!iv || bytes_of_cleartext_data[0] > 0))
     {
       //Note that we assume that there is enough data in data_out to hold everything without reallocating.
 
@@ -575,16 +604,16 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
       while (packet_in < packet_in_e)
       {
         uint32_t nalsize(0);
-        for (unsigned int i(0); i < nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
+        for (unsigned int i(0); i < fragInfo.nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
 
         //look if we have to inject sps / pps
-        //if (annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
+        //if (fragInfo.annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
         /*{
-          memcpy(packet_out, annexb_sps_pps_.GetData(), annexb_sps_pps_.GetDataSize());
-          packet_out += annexb_sps_pps_.GetDataSize();
-          if (clrb_out) *clrb_out += annexb_sps_pps_.GetDataSize();
-          configSize = annexb_sps_pps_.GetDataSize();
-          annexb_sps_pps_.SetDataSize(0);
+          memcpy(packet_out, fragInfo.annexb_sps_pps_.GetData(), fragInfo.annexb_sps_pps_.GetDataSize());
+          packet_out += fragInfo.annexb_sps_pps_.GetDataSize();
+          if (clrb_out) *clrb_out += fragInfo.annexb_sps_pps_.GetDataSize();
+          configSize = fragInfo.annexb_sps_pps_.GetDataSize();
+          fragInfo.annexb_sps_pps_.SetDataSize(0);
         }*/
 
         //Anex-B Start pos
@@ -593,19 +622,20 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
         memcpy(packet_out, packet_in, nalsize);
         packet_in += nalsize;
         packet_out += nalsize;
-        if (clrb_out) *clrb_out += (4 - nal_length_size_);
+        if (clrb_out) *clrb_out += (4 - fragInfo.nal_length_size_);
         ++nalunitcount;
 
-        if (nalsize + nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        if (nalsize + fragInfo.nal_length_size_ + nalunitsum > *bytes_of_cleartext_data + *bytes_of_encrypted_data)
         {
-          Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", nal_length_size_, nalsize + nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
+          Log(SSD_HOST::LL_ERROR, "NAL Unit exceeds subsample definition (nls: %d) %d -> %d ", fragInfo.nal_length_size_,
+            nalsize + fragInfo.nal_length_size_ + nalunitsum, *bytes_of_cleartext_data + *bytes_of_encrypted_data);
           return AP4_ERROR_NOT_SUPPORTED;
         }
         else if (!iv)
         {
           nalunitsum = 0;
         }
-        else if (nalsize + nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
+        else if (nalsize + fragInfo.nal_length_size_ + nalunitsum == *bytes_of_cleartext_data + *bytes_of_encrypted_data)
         {
           ++bytes_of_cleartext_data;
           ++bytes_of_encrypted_data;
@@ -614,21 +644,23 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(
           nalunitsum = 0;
         }
         else
-          nalunitsum += nalsize + nal_length_size_;
+          nalunitsum += nalsize + fragInfo.nal_length_size_;
       }
       if (packet_in != packet_in_e || subsample_count)
       {
-        Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
+        Log(SSD_HOST::LL_ERROR, "NAL Unit definition incomplete (nls: %d) %d -> %u ", fragInfo.nal_length_size_, (int)(packet_in_e - packet_in), subsample_count);
         return AP4_ERROR_NOT_SUPPORTED;
       }
-      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - nal_length_size_) * nalunitcount);
+      data_out.SetDataSize(data_out.GetDataSize() + data_in.GetDataSize() + configSize + (4 - fragInfo.nal_length_size_) * nalunitcount);
     }
     else
     {
       data_out.AppendData(data_in.GetData(), data_in.GetDataSize());
-      annexb_sps_pps_.SetDataSize(0);
+      fragInfo.annexb_sps_pps_.SetDataSize(0);
     }
   }
+  else
+    data_out.SetDataSize(0);
   return AP4_SUCCESS;
 }
 
