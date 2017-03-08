@@ -408,8 +408,11 @@ WV_DRM::WV_DRM(const char* licenseURL, const AP4_DataBuffer &serverCert)
 
 WV_DRM::~WV_DRM()
 {
-  wv_adapter->RemoveClient();
-  wv_adapter = nullptr;
+  if (wv_adapter)
+  {
+    wv_adapter->RemoveClient();
+    wv_adapter = nullptr;
+  }
 }
 
 void WV_DRM::OnCDMMessage(const char* session, uint32_t session_size, CDMADPMSG msg, const uint8_t *data, size_t data_size, uint32_t status)
