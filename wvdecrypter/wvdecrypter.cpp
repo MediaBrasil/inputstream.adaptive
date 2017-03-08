@@ -265,7 +265,7 @@ public:
   void ResetVideo();
 
 private:
-  bool SendSessionMessage(const char* session, uint32_t session_size, const uint8_t *message, uint32_t message_size);
+  bool SendSessionMessage();
 
   WV_DRM &drm_;
   std::string session_;
@@ -492,7 +492,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
     return;
   }
 
-  SendSessionMessage(session_.data(), session_.size(), challenge_.GetData(), challenge_.GetDataSize());
+  while (challenge_.GetDataSize() > 0 && SendSessionMessage());
 
   if (keys_.empty())
   {
@@ -578,7 +578,7 @@ const char *WV_CencSingleSampleDecrypter::GetSessionId()
   return session_.empty()? nullptr : session_.c_str();
 }
 
-bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint32_t session_size, const uint8_t *message, uint32_t message_size)
+bool WV_CencSingleSampleDecrypter::SendSessionMessage()
 {
   std::vector<std::string> headers, header, blocks = split(drm_.GetLicenseURL(), '|');
   if (blocks.size() != 4)
@@ -591,7 +591,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
   std::string strDbg = host->GetProfilePath();
   strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.challenge";
   FILE*f = fopen(strDbg.c_str(), "wb");
-  fwrite(message, 1, message_size, f);
+  fwrite(challenge_.GetData(), 1, challenge_.GetDataSize(), f);
   fclose(f);
 #endif
 
@@ -601,7 +601,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
   {
     if (insPos >= 0 && blocks[0][insPos - 1] == 'B')
     {
-      std::string msgEncoded = b64_encode(message, message_size, true);
+      std::string msgEncoded = b64_encode(challenge_.GetData(), challenge_.GetDataSize(), true);
       blocks[0].replace(insPos - 1, 6, msgEncoded);
     }
     else
@@ -641,14 +641,14 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
       {
         if (blocks[2][insPos - 1] == 'B' || blocks[2][insPos - 1] == 'b')
         {
-          std::string msgEncoded = b64_encode(message, message_size, blocks[2][insPos - 1] == 'B');
+          std::string msgEncoded = b64_encode(challenge_.GetData(), challenge_.GetDataSize(), blocks[2][insPos - 1] == 'B');
           blocks[2].replace(insPos - 1, 6, msgEncoded);
           sidSearchPos += msgEncoded.size();
         }
         else
         {
-          blocks[2].replace(insPos - 1, 6, reinterpret_cast<const char*>(message), message_size);
-          sidSearchPos += message_size;
+          blocks[2].replace(insPos - 1, 6, reinterpret_cast<const char*>(challenge_.GetData()), challenge_.GetDataSize());
+          sidSearchPos += challenge_.GetDataSize();
         }
       }
       else
@@ -664,11 +664,11 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
         {
           if (blocks[2][insPos - 1] == 'B' || blocks[2][insPos - 1] == 'b')
           {
-            std::string msgEncoded = b64_encode(reinterpret_cast<const unsigned char*>(session),session_size, blocks[2][insPos - 1] == 'B');
+            std::string msgEncoded = b64_encode(reinterpret_cast<const unsigned char*>(session_.data()),session_.size(), blocks[2][insPos - 1] == 'B');
             blocks[2].replace(insPos - 1, 6, msgEncoded);
           }
           else
-            blocks[2].replace(insPos - 1, 6, session, session_size);
+            blocks[2].replace(insPos - 1, 6, session_.data(), session_.size());
         }
         else
         {
@@ -680,6 +680,8 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
     std::string decoded = b64_encode(reinterpret_cast<const unsigned char*>(blocks[2].data()), blocks[2].size(), false);
     host->CURLAddOption(file, SSD_HOST::OPTION_PROTOCOL, "postdata", decoded.c_str());
   }
+
+  challenge_.SetDataSize(0);
 
   if (!host->CURLOpen(file))
   {
@@ -748,10 +750,10 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
           unsigned int decoded_size = 2048;
           uint8_t decoded[2048];
           b64_decode(response.c_str() + tokens[i + 1].start, tokens[i + 1].end - tokens[i + 1].start, decoded, decoded_size);
-          drm_.GetCdmAdapter()->UpdateSession(++promise_id_, session, session_size, reinterpret_cast<const uint8_t*>(decoded), decoded_size);
+          drm_.GetCdmAdapter()->UpdateSession(++promise_id_, session_.data(), session_.size(), reinterpret_cast<const uint8_t*>(decoded), decoded_size);
         }
         else
-          drm_.GetCdmAdapter()->UpdateSession(++promise_id_, session, session_size,
+          drm_.GetCdmAdapter()->UpdateSession(++promise_id_, session_.data(), session_.size(),
             reinterpret_cast<const uint8_t*>(response.c_str() + tokens[i + 1].start), tokens[i + 1].end - tokens[i + 1].start);
       }
       else
@@ -766,7 +768,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(const char* session, uint3
       goto SSMFAIL;
     }
   } else //its binary - simply push the returned data as update
-    drm_.GetCdmAdapter()->UpdateSession(++promise_id_, session, session_size,
+    drm_.GetCdmAdapter()->UpdateSession(++promise_id_, session_.data(), session_.size(),
       reinterpret_cast<const uint8_t*>(response.data()), response.size());
 
   return true;
