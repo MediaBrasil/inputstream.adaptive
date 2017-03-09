@@ -68,16 +68,24 @@ public:
   ~WV_DRM();
 
   AMediaDrm *GetMediaDrm() { return media_drm_; };
-  const std::string &GetLicenseURL() { return license_url_; };
+
+  const std::string &GetLicenseURL() const { return license_url_; };
+
+  const uint8_t *GetKeySystem() const
+  {
+    static const uint8_t keysystemId[2][16] = { { 0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed },
+      { 0x9A, 0x04, 0xF0, 0x79, 0x98, 0x40, 0x42, 0x86, 0xAB, 0x92, 0xE6, 0x5B, 0xE0, 0x88, 0x5F, 0x95 } };
+    return keysystemId[key_system_-1];
+  }
 
 private:
-  WV_KEYSYSTEM key_sytem_;
+  WV_KEYSYSTEM key_system_;
   AMediaDrm *media_drm_;
   std::string license_url_;
 };
 
 WV_DRM::WV_DRM(WV_KEYSYSTEM ks, const char* licenseURL, const AP4_DataBuffer &serverCert)
-  : key_system(ks)
+  : key_system_(ks)
   , media_drm_(0)
   , license_url_(licenseURL)
 {
@@ -107,10 +115,7 @@ WV_DRM::WV_DRM(WV_KEYSYSTEM ks, const char* licenseURL, const AP4_DataBuffer &se
   strBasePath += cSep;
   host->CreateDirectory(strBasePath.c_str());
 
-  uint8_t keysystemId[2][16] = { { 0xed, 0xef, 0x8b, 0xa9, 0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed },
-  { 0x9A, 0x04, 0xF0, 0x79, 0x98, 0x40, 0x42, 0x86, 0xAB, 0x92, 0xE6, 0x5B, 0xE0, 0x88, 0x5F, 0x95 } };
-
-  media_drm_ = AMediaDrm_createByUUID(keysystemId[key_sytem_-1]);
+  media_drm_ = AMediaDrm_createByUUID(GetKeySystem());
   if (!media_drm_)
   {
     Log(SSD_HOST::LL_ERROR, "Unable to initialize media_drm");
@@ -129,7 +134,7 @@ WV_DRM::WV_DRM(WV_KEYSYSTEM ks, const char* licenseURL, const AP4_DataBuffer &se
 
   if (license_url_.find('|') == std::string::npos)
   {
-    if (key_sytem_ == WIDEVINE)
+    if (key_system_ == WIDEVINE)
       license_url_ += "|Content-Type=application%2Fx-www-form-urlencoded|widevine2Challenge=B{SSM}&includeHdcpTestKeyInLicense=false|JBlicense";
     else
       license_url_ += "|Content-Type=text%2Fxml&SOAPAction=http%3A%2F%2Fschemas.microsoft.com%2FDRM%2F2007%2F03%2Fprotocols%2FAcquireLicense||";
@@ -214,7 +219,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
 {
   SetParentIsOwner(false);
 
-  if (pssh.GetDataSize() > 256)
+  if (pssh.GetDataSize() > 65535)
   {
     Log(SSD_HOST::LL_ERROR, "Init_data with length: %u seems not to be cenc init data!", pssh.GetDataSize());
     return;
@@ -232,13 +237,19 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
 
   if (memcmp(pssh.GetData() + 4, "pssh", 4) != 0)
   {
-    static const uint8_t atom[] = { 0x00, 0x00, 0x00, 0x00, 0x70, 0x73, 0x73, 0x68, 0x00, 0x00, 0x00, 0x00, 0xed, 0xef, 0x8b, 0xa9,
-      0x79, 0xd6, 0x4a, 0xce, 0xa3, 0xc8, 0x27, 0xdc, 0xd5, 0x1d, 0x21, 0xed, 0x00, 0x00, 0x00, 0x00 };
+    const uint8_t atomheader[] = { 0x00, 0x00, 0x00, 0x00, 0x70, 0x73, 0x73, 0x68, 0x00, 0x00, 0x00, 0x00 };
+    uint8_t atom[32];
+    memcpy(atom, atomheader, 12);
+    memcpy(atom+12, media_drm_.GetKeySystem(), 16);
+    memset(atom+28, 0, 4);
 
     pssh_.insert(0, std::string(reinterpret_cast<const char*>(atom), sizeof(atom)));
 
     pssh_[3] = static_cast<uint8_t>(pssh_.size());
+    pssh_[2] = static_cast<uint8_t>(pssh_.size() >> 8);
+
     pssh_[sizeof(atom) - 1] = static_cast<uint8_t>(pssh_.size()) - sizeof(atom);
+    pssh_[sizeof(atom) - 2] = static_cast<uint8_t>((pssh_.size() - sizeof(atom)) >> 8);
   }
 
   media_status_t status;
@@ -693,15 +704,16 @@ public:
 
   virtual const char *SelectKeySytem(const char* keySystem)
   {
+    Log(SSD_HOST::LL_ERROR, "Key system request: %s", keySystem);
     if (strcmp(keySystem, "com.widevine.alpha") == 0)
     {
-      return "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
       key_system_ = WIDEVINE;
+      return "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
     }
     else if (strcmp(keySystem, "com.microsoft.playready") == 0)
     {
-      return "urn:uuid:9A04F079-9840-4286-AB92-E65BE0885F95";
       key_system_ = PLAYREADY;
+      return "urn:uuid:9A04F079-9840-4286-AB92-E65BE0885F95";
     }
     else
       return nullptr;
@@ -712,7 +724,7 @@ public:
     if (key_system_ == NONE)
       return false;
     
-    cdmsession_ = new WV_DRM(key_system, licenseURL, serverCertificate);
+    cdmsession_ = new WV_DRM(key_system_, licenseURL, serverCertificate);
 
     return cdmsession_->GetMediaDrm();
   }
