@@ -1176,17 +1176,19 @@ public:
     cdmsession_ = nullptr;
   };
 
-  virtual const char *OpenDRMSystem(const char* keySystem, const char *licenseURL, const AP4_DataBuffer &serverCertificate)
+  virtual const char *SelectKeySytem(const char* keySystem)
   {
     if (strcmp(keySystem, "com.widevine.alpha"))
       return nullptr;
 
+    return "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
+  }
+
+  virtual bool OpenDRMSystem(const char *licenseURL, const AP4_DataBuffer &serverCertificate)
+  {
     cdmsession_ = new WV_DRM(licenseURL, serverCertificate);
 
-    if (!cdmsession_->GetCdmAdapter())
-      return nullptr;
-
-    return "urn:uuid:EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED";
+    return cdmsession_->GetCdmAdapter() != nullptr;
   }
 
   virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh) override
