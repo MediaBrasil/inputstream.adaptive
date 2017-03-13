@@ -211,7 +211,7 @@ private:
 |   WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter
 +---------------------------------------------------------------------*/
 
-WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh)
+WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const char *optionalKeyParameter)
   : AP4_CencSingleSampleDecrypter(0)
   , media_drm_(drm)
   , key_request_(nullptr)
@@ -269,9 +269,13 @@ TRYAGAIN:
   }
   needProvision = false;
 
+  AMediaDrmKeyValuePair kv;
+  kv.mKey = "PRCustomData";
+  kv.mValue = optionalKeyParameter;
+
   status = AMediaDrm_getKeyRequest(media_drm_.GetMediaDrm(), &session_id_,
-    reinterpret_cast<const uint8_t*>(pssh_.data()), pssh_.size(),
-    "video/mp4", KEY_TYPE_STREAMING, 0, 0, &key_request_, &key_request_size_);
+    reinterpret_cast<const uint8_t*>(pssh_.data()), pssh_.size(), "video/mp4", KEY_TYPE_STREAMING,
+    &kv, (optionalKeyParameter != nullptr) ? 1 : 0 , &key_request_, &key_request_size_);
 
   if (status != AMEDIA_OK || !key_request_size_)
   {
@@ -729,9 +733,9 @@ public:
     return cdmsession_->GetMediaDrm();
   }
 
-  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh) override
+  virtual AP4_CencSingleSampleDecrypter *CreateSingleSampleDecrypter(AP4_DataBuffer &pssh, const char *optionalKeyParameter) override
   {
-    WV_CencSingleSampleDecrypter *decrypter = new WV_CencSingleSampleDecrypter(*cdmsession_, pssh);
+    WV_CencSingleSampleDecrypter *decrypter = new WV_CencSingleSampleDecrypter(*cdmsession_, pssh, optionalKeyParameter);
     if (!decrypter->GetSessionId())
     {
       delete decrypter;
