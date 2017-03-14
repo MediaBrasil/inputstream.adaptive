@@ -104,7 +104,7 @@ private:
 
 class CdmFixedBuffer : public cdm::Buffer {
 public:
-  CdmFixedBuffer() : data_(nullptr), dataSize_(0), capacity_(0) {};
+  CdmFixedBuffer() : data_(nullptr), dataSize_(0), capacity_(0), opaque_(~0) {};
   virtual ~CdmFixedBuffer() {};
 
   virtual void Destroy() override {};
@@ -126,16 +126,19 @@ public:
     return dataSize_;
   };
 
-  void initialize(uint8_t* data, size_t dataSize)
+  void initialize(uint8_t* data, uint32_t opq, size_t dataSize)
   {
     data_ = data;
     dataSize_ = 0;
     capacity_ = dataSize;
+    opaque_ = opq;
   }
+  uint32_t Opaque() { return opaque_; };
 
 private:
   uint8_t *data_;
   size_t dataSize_, capacity_;
+  uint32_t opaque_;
 };
 
 class CdmVideoFrame : public cdm::VideoFrame {
@@ -313,11 +316,11 @@ public:
   virtual cdm::Buffer *AllocateBuffer(size_t sz) override
   {
     SSD_PICTURE pic;
-    pic.decodedDataSize = sz;
+    pic.dataSize = sz;
     if (host->GetBuffer(host_instance_, pic))
     {
       CdmFixedBuffer *buf = new CdmFixedBuffer;
-      buf->initialize(pic.decodedData, pic.decodedDataSize);
+      buf->initialize(static_cast<uint8_t*>(pic.buffer), pic.bufferOpaque, pic.dataSize);
       return buf;
     }
     return nullptr;
@@ -1124,8 +1127,9 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
       picture->width = videoFrame_.Size().width;
       picture->height = videoFrame_.Size().height;
       picture->pts = videoFrame_.Timestamp();
-      picture->decodedData = videoFrame_.FrameBuffer()->Data();
-      picture->decodedDataSize = videoFrame_.FrameBuffer()->Size();
+      picture->buffer = videoFrame_.FrameBuffer()->Data();
+      picture->dataSize = videoFrame_.FrameBuffer()->Size();
+      picture->bufferOpaque = ((CdmFixedBuffer*)videoFrame_.FrameBuffer())->Opaque();
 
       for (unsigned int i(0); i < cdm::VideoFrame::kMaxPlanes; ++i)
       {
