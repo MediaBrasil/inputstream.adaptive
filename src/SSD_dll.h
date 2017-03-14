@@ -96,12 +96,14 @@ namespace SSD
     };
 
     SSD_VIDEOFORMAT videoFormat;
-    uint32_t flags;
 
     uint32_t width, height;
 
-    uint8_t *decodedData;
-    size_t decodedDataSize;
+    uint32_t flags;
+
+    uint32_t bufferOpaque;
+    void *buffer;
+    size_t dataSize;
 
     uint32_t planeOffsets[VideoPlane::MaxPlanes];
     uint32_t stride[VideoPlane::MaxPlanes];
