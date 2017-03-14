@@ -104,7 +104,7 @@ private:
 
 class CdmFixedBuffer : public cdm::Buffer {
 public:
-  CdmFixedBuffer() : data_(nullptr), dataSize_(0), capacity_(0), opaque_(~0) {};
+  CdmFixedBuffer() : data_(nullptr), dataSize_(0), capacity_(0), opaque_(~0), instance_(nullptr) {};
   virtual ~CdmFixedBuffer() {};
 
   virtual void Destroy() override
