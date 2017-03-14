@@ -77,6 +77,7 @@ public:
       { 0x9A, 0x04, 0xF0, 0x79, 0x98, 0x40, 0x42, 0x86, 0xAB, 0x92, 0xE6, 0x5B, 0xE0, 0x88, 0x5F, 0x95 } };
     return keysystemId[key_system_-1];
   }
+  WV_KEYSYSTEM GetKeySystemType() const { return key_system_; };
 
 private:
   WV_KEYSYSTEM key_system_;
@@ -121,7 +122,11 @@ WV_DRM::WV_DRM(WV_KEYSYSTEM ks, const char* licenseURL, const AP4_DataBuffer &se
     Log(SSD_HOST::LL_ERROR, "Unable to initialize media_drm");
     return;
   }
-  Log(SSD_HOST::LL_DEBUG, "Successful instanciated media_drm: %X", (unsigned int)media_drm_);
+
+  const char* deviceid="unknown";
+  AMediaDrm_getPropertyString(media_drm_, "deviceUniqueId", &deviceid);
+
+  Log(SSD_HOST::LL_DEBUG, "Successful instanciated media_drm: %X, deviceid: %s", (unsigned int)media_drm_, deviceid);
 
   media_status_t status;
   if ((status = AMediaDrm_setOnEventListener(media_drm_, MediaDrmEventListener)) != AMEDIA_OK)
@@ -157,7 +162,7 @@ class WV_CencSingleSampleDecrypter : public AP4_CencSingleSampleDecrypter
 {
 public:
   // methods
-  WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh);
+  WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh, const char *optionalKeyParameter);
   ~WV_CencSingleSampleDecrypter();
 
   size_t CreateSession(AP4_DataBuffer &pssh);
@@ -261,6 +266,8 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
     return;
   }
 
+  bool retry(false);
+
 TRYAGAIN:
   if (needProvision && !ProvisionRequest())
   {
@@ -292,6 +299,12 @@ TRYAGAIN:
     goto FAILWITHSESSION;
 
   Log(SSD_HOST::LL_DEBUG, "License update successful");
+
+  if (retry)
+  {
+    retry = false;
+    goto TRYAGAIN;
+  }
 
   memcpy(session_id_char_, session_id_.ptr, session_id_.length);
   session_id_char_[session_id_.length] = 0;
@@ -480,6 +493,20 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(AMediaDrmByteArray &sessio
     goto SSMFAIL;
   }
 
+  if (media_drm_.GetKeySystemType() == PLAYREADY && response.find("<LicenseNonce>") == std::string::npos)
+  {
+    std::string::size_type dstPos(response.find("</Licenses>"));
+    std::string challenge((const char*)key_request, key_request_size);
+    std::string::size_type srcPosS(challenge.find("<LicenseNonce>"));
+    if (dstPos != std::string::npos && srcPosS != std::string::npos)
+    {
+      Log(SSD_HOST::LL_DEBUG, "Inserting <LicenseNonce>");
+      std::string::size_type srcPosE(challenge.find("</LicenseNonce>", srcPosS));
+      if (srcPosE != std::string::npos)
+        response.insert(dstPos + 11, challenge.c_str() + srcPosS, srcPosE - srcPosS + 15);
+    }
+  }
+
 #ifdef _DEBUG
   strDbg = host->GetProfilePath();
   strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.response";
@@ -639,14 +666,14 @@ AP4_Result WV_CencSingleSampleDecrypter::DecryptSampleData(AP4_UI32 pool_id,
         for (unsigned int i(0); i < fragInfo.nal_length_size_; ++i) { nalsize = (nalsize << 8) + *packet_in++; };
 
         //look if we have to inject sps / pps
-        //if (fragInfo.annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
-        /*{
+        if (fragInfo.annexb_sps_pps_.GetDataSize() && (*packet_in & 0x1F) != 9 /*AVC_NAL_AUD*/)
+        {
           memcpy(packet_out, fragInfo.annexb_sps_pps_.GetData(), fragInfo.annexb_sps_pps_.GetDataSize());
           packet_out += fragInfo.annexb_sps_pps_.GetDataSize();
           if (clrb_out) *clrb_out += fragInfo.annexb_sps_pps_.GetDataSize();
           configSize = fragInfo.annexb_sps_pps_.GetDataSize();
           fragInfo.annexb_sps_pps_.SetDataSize(0);
-        }*/
+        }
 
         //Anex-B Start pos
         packet_out[0] = packet_out[1] = packet_out[2] = 0; packet_out[3] = 1;
@@ -727,7 +754,7 @@ public:
   {
     if (key_system_ == NONE)
       return false;
-    
+
     cdmsession_ = new WV_DRM(key_system_, licenseURL, serverCertificate);
 
     return cdmsession_->GetMediaDrm();
