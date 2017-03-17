@@ -107,7 +107,11 @@ public:
   CdmFixedBuffer() : data_(nullptr), dataSize_(0), capacity_(0), opaque_(~0) {};
   virtual ~CdmFixedBuffer() {};
 
-  virtual void Destroy() override {};
+  virtual void Destroy() override
+  {
+    host->ReleaseBuffer(instance_, opaque_, data_);
+    delete this;
+  };
 
   virtual uint32_t Capacity() const override
   {
@@ -126,12 +130,13 @@ public:
     return dataSize_;
   };
 
-  void initialize(uint8_t* data, uint32_t opq, size_t dataSize)
+  void initialize(void *instance, uint8_t* data, uint32_t opq, size_t dataSize)
   {
     data_ = data;
     dataSize_ = 0;
     capacity_ = dataSize;
     opaque_ = opq;
+    instance_ = instance;
   }
   uint32_t Opaque() { return opaque_; };
 
@@ -139,6 +144,7 @@ private:
   uint8_t *data_;
   size_t dataSize_, capacity_;
   uint32_t opaque_;
+  void *instance_;
 };
 
 class CdmVideoFrame : public cdm::VideoFrame {
@@ -295,6 +301,7 @@ private:
   std::vector<FINFO> fragment_pool_;
 
   uint32_t promise_id_;
+  bool drained_;
 
   std::list<CdmVideoFrame> videoFrames_;
 };
@@ -320,7 +327,7 @@ public:
     if (host->GetBuffer(host_instance_, pic))
     {
       CdmFixedBuffer *buf = new CdmFixedBuffer;
-      buf->initialize(static_cast<uint8_t*>(pic.buffer), pic.bufferOpaque, pic.dataSize);
+      buf->initialize(host_instance_, static_cast<uint8_t*>(pic.buffer), pic.bufferOpaque, pic.dataSize);
       return buf;
     }
     return nullptr;
@@ -342,6 +349,7 @@ public:
     host_instance_ = hostInstance;
     cdm::Status ret = wv_adapter->DecryptAndDecodeFrame(cdm_in, frame);
     host_instance_ = nullptr;
+
     return ret;
   }
 
@@ -447,6 +455,7 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
   , subsample_buffer_(0)
   , use_single_decrypt_(false)
   , promise_id_(0)
+  , drained_(true)
 {
   memset(&decrypter_caps_, 0, sizeof(decrypter_caps_));
   SetParentIsOwner(false);
@@ -1053,6 +1062,7 @@ bool WV_CencSingleSampleDecrypter::OpenVideoDecoder(const SSD_VIDEOINITDATA *ini
 
   cdm::Status ret = drm_.GetCdmAdapter()->InitializeVideoDecoder(vconfig);
   videoFrames_.clear();
+  drained_ = true;
 
   Log(SSD_HOST::LL_DEBUG, "WVDecoder initialization returned status %i", ret);
 
@@ -1102,6 +1112,9 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
     cdm_in.key_id = sample->kid ? sample->kid : &unencryptedKID;
     cdm_in.key_id_size = sample->kid ? 16 : 1;
 
+    if (sample->dataSize)
+      drained_ = false;
+
     //DecryptAndDecode calls Alloc wich cals kodi VideoCodec. Set instance handle.
     CdmVideoFrame frame;
     cdm::Status ret = drm_.DecryptAndDecodeFrame(hostInstance, cdm_in, &frame);
@@ -1137,9 +1150,9 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
         picture->stride[i] = videoFrame_.Stride(static_cast<cdm::VideoFrame::VideoPlane>(i));
       }
       picture->videoFormat = static_cast<SSD::SSD_VIDEOFORMAT>(videoFrame_.Format());
-      videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
 
       delete (CdmFixedBuffer*)(videoFrame_.FrameBuffer());
+      videoFrame_.SetFrameBuffer(nullptr); //marker for "No Picture"
       videoFrames_.pop_front();
 
       return VC_PICTURE;
@@ -1147,8 +1160,11 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
     else if ((picture->flags & SSD_PICTURE::FLAG_DRAIN))
     {
       static SSD_SAMPLE drainSample = { nullptr,0,0,0,0,nullptr,nullptr,nullptr,nullptr };
-      if (DecodeVideo(hostInstance, &drainSample, nullptr) == VC_ERROR)
+      if (drained_ || DecodeVideo(hostInstance, &drainSample, nullptr) == VC_ERROR)
+      {
+        drained_ = true;
         return VC_EOF;
+      }
       else
         return VC_NONE;
     }
@@ -1162,6 +1178,7 @@ SSD_DECODE_RETVAL WV_CencSingleSampleDecrypter::DecodeVideo(void* hostInstance, 
 void WV_CencSingleSampleDecrypter::ResetVideo()
 {
   drm_.GetCdmAdapter()->ResetDecoder(cdm::kStreamTypeVideo);
+  drained_ = true;
 }
 
 /*********************************************************************************************/
