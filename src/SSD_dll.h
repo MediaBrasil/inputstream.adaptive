@@ -28,6 +28,7 @@ namespace SSD
     virtual void CloseFile(void* file) = 0;
     virtual bool CreateDirectory(const char *dir) = 0;
     virtual bool GetBuffer(void* instance, SSD_PICTURE &picture) = 0;
+    virtual void ReleaseBuffer(void* instance, uint32_t bufferOpaque, void *buffer) = 0;
 
     enum LOGLEVEL
     {

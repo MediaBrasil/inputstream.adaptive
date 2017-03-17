@@ -134,6 +134,11 @@ public:
     return instance ? static_cast<kodi::addon::CInstanceVideoCodec*>(instance)->GetFrameBuffer(*reinterpret_cast<VIDEOCODEC_PICTURE*>(&picture)) : false;
   }
 
+  virtual void ReleaseBuffer(void* instance, uint32_t bufferOpaque, void *buffer) override
+  {
+    if (instance)
+      static_cast<kodi::addon::CInstanceVideoCodec*>(instance)->ReleaseFrameBuffer(bufferOpaque, buffer);
+  }
 private:
   std::string m_strProfilePath, m_strLibraryPath;
 }kodihost;
@@ -833,14 +838,19 @@ protected:
           return AP4_ERROR_INVALID_FORMAT;
 
         if (AP4_FAILED(result = AP4_CencSampleInfoTable::Create(m_Protected_desc, traf, algorithm_id, *m_FragmentStream, moof_offset, sample_table)))
+        {
+          if (m_SingleSampleDecryptor)
+            m_SingleSampleDecryptor->SetFragmentInfo(m_PoolId, m_DefaultKey, m_codecHandler->naluLengthSize, m_codecHandler->extra_data);
           // we assume unencrypted fragment here
           return AP4_SUCCESS;
+        }
 
         if (AP4_FAILED(result = AP4_CencSampleDecrypter::Create(sample_table, algorithm_id, 0, 0, 0, m_SingleSampleDecryptor, m_Decrypter)))
           return result;
 
         if (m_SingleSampleDecryptor)
           m_SingleSampleDecryptor->SetFragmentInfo(m_PoolId, m_DefaultKey, m_codecHandler->naluLengthSize, m_codecHandler->extra_data);
+
       }
     }
 
@@ -1524,7 +1534,7 @@ std::uint16_t Session::GetVideoHeight() const
 AP4_CencSingleSampleDecrypter *Session::GetSingleSampleDecrypter(std::string sessionId)
 {
   for (std::vector<CDMSESSION>::iterator b(cdm_sessions_.begin() + 1), e(cdm_sessions_.end()); b != e; ++b)
-    if (sessionId == b->cdm_session_str_)
+    if (b->cdm_session_str_ && sessionId == b->cdm_session_str_)
       return b->single_sample_decryptor_;
   return nullptr;
 }
