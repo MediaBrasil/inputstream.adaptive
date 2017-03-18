@@ -777,7 +777,7 @@ public:
       delete static_cast<WV_CencSingleSampleDecrypter*>(decrypter);
   }
 
-  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(AP4_CencSingleSampleDecrypter* decrypter, const uint8_t *keyid) override
+  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(AP4_CencSingleSampleDecrypter* decrypter, const uint8_t *keyid, uint32_t media) override
   {
     static const SSD_DECRYPTER::SSD_CAPS dummy_caps = { SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED, 0, 0 };
     return dummy_caps;

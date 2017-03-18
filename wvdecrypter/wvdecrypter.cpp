@@ -224,7 +224,7 @@ public:
   WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_DataBuffer &pssh);
   ~WV_CencSingleSampleDecrypter();
 
-  const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(const uint8_t* key);
+  const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(const uint8_t* key, uint32_t media);
   virtual const char *GetSessionId() override;
   void SetSession(const char* session, uint32_t session_size, const uint8_t *data, size_t data_size)
   {
@@ -514,7 +514,7 @@ WV_CencSingleSampleDecrypter::~WV_CencSingleSampleDecrypter()
   drm_.removessd(this);
 }
 
-const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(const uint8_t* key)
+const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(const uint8_t* key, uint32_t media)
 {
   if (session_.empty())
     return decrypter_caps_;
@@ -525,11 +525,7 @@ const SSD_DECRYPTER::SSD_CAPS &WV_CencSingleSampleDecrypter::GetCapabilities(con
   if (keys_.empty())
     return decrypter_caps_;
 
-  /*if (decrypter_caps_.hdcpLimit)
-  {
-    decrypter_caps_.flags |= (SSD_DECRYPTER::SSD_CAPS::SSD_SECURE_PATH | SSD_DECRYPTER::SSD_CAPS::SSD_ANNEXB_REQUIRED);
-  }
-  else*/
+  if (media == SSD_DECRYPTER::SSD_CAPS::SSD_MEDIA_VIDEO)
   {
     for (auto k : keys_)
       if (!key || memcmp(k.keyid.data(), key, 16) == 0)
@@ -1208,7 +1204,7 @@ public:
       delete static_cast<WV_CencSingleSampleDecrypter*>(decrypter);
   }
 
-  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(AP4_CencSingleSampleDecrypter* decrypter, const uint8_t *keyid) override
+  virtual const SSD_DECRYPTER::SSD_CAPS &GetCapabilities(AP4_CencSingleSampleDecrypter* decrypter, const uint8_t *keyid, uint32_t media) override
   {
     if (!decrypter)
     {
@@ -1216,7 +1212,7 @@ public:
       return dummy_caps;
     }
 
-    return static_cast<WV_CencSingleSampleDecrypter*>(decrypter)->GetCapabilities(keyid);
+    return static_cast<WV_CencSingleSampleDecrypter*>(decrypter)->GetCapabilities(keyid, media);
   }
 
   virtual bool OpenVideoDecoder(AP4_CencSingleSampleDecrypter* decrypter, const SSD_VIDEOINITDATA *initData)
