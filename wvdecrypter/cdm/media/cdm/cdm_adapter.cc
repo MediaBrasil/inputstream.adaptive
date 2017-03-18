@@ -231,7 +231,7 @@ cdm::Status CdmAdapter::Decrypt(const cdm::InputBuffer& encrypted_buffer,
 {
   //We need this wait here for fast systems, during buffering
   //widewine stopps if some seconds (5??) are fetched too fast
-  std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
   active_buffer_ = decrypted_buffer->DecryptedBuffer();
   cdm::Status ret = cdm_->Decrypt(encrypted_buffer, decrypted_buffer);

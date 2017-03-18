@@ -259,14 +259,16 @@ WV_CencSingleSampleDecrypter::WV_CencSingleSampleDecrypter(WV_DRM &drm, AP4_Data
 
   media_status_t status;
 
+  bool retry(false);
+  size_t old_key_request_size(0);
+
+SESSIONAGIN:
   memset(&session_id_, 0, sizeof(session_id_));
   if ((status = AMediaDrm_openSession(media_drm_.GetMediaDrm(), &session_id_)) != AMEDIA_OK)
   {
     Log(SSD_HOST::LL_ERROR, "Unable to open DRM session (%d)", status);
     return;
   }
-
-  bool retry(false);
 
 TRYAGAIN:
   if (needProvision && !ProvisionRequest())
@@ -293,9 +295,9 @@ TRYAGAIN:
       goto FAILWITHSESSION;
   }
 
-  Log(SSD_HOST::LL_DEBUG, "Key request successful, size: %u", reinterpret_cast<unsigned int>(key_request_size_));
+  Log(SSD_HOST::LL_DEBUG, "Key request successful, size: %u, oldsize: %u", reinterpret_cast<unsigned int>(key_request_size_), reinterpret_cast<unsigned int>(old_key_request_size));
 
-  if (!SendSessionMessage(session_id_, key_request_, key_request_size_))
+  if (!SendSessionMessage(session_id_, key_request_, key_request_size_ - old_key_request_size))
     goto FAILWITHSESSION;
 
   Log(SSD_HOST::LL_DEBUG, "License update successful");
@@ -303,7 +305,8 @@ TRYAGAIN:
   if (retry)
   {
     retry = false;
-    goto TRYAGAIN;
+    old_key_request_size = key_request_size_;
+    goto SESSIONAGIN;
   }
 
   memcpy(session_id_char_, session_id_.ptr, session_id_.length);
@@ -511,7 +514,7 @@ bool WV_CencSingleSampleDecrypter::SendSessionMessage(AMediaDrmByteArray &sessio
   strDbg = host->GetProfilePath();
   strDbg += "EDEF8BA9-79D6-4ACE-A3C8-27DCD51D21ED.response";
   f = fopen(strDbg.c_str(), "wb");
-  fwrite(response.c_str(), 1, response.size(), f);
+  fwrite(response.data(), 1, response.size(), f);
   fclose(f);
 #endif
 
