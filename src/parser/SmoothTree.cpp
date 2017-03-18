@@ -355,6 +355,7 @@ bool SmoothTree::open(const char *url)
     PSSH pssh;
     pssh.defaultKID_ = adp_defaultKID_;
     pssh.pssh_ = adp_pssh_;
+    pssh.media_ = PSSH::MEDIA_AUDIO | PSSH::MEDIA_VIDEO;
     psshset = insert_psshset(pssh);
   }
 
