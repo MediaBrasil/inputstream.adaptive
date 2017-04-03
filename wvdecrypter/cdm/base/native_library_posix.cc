@@ -25,7 +25,7 @@ NativeLibrary LoadNativeLibrary(const std::string& library_path,
 #ifdef ANDROID
   void* dl = dlopen(library_path.c_str(), RTLD_LAZY);
 #else
-  void* dl = dlopen(library_path.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
+  void* dl = dlopen(library_path.c_str(), RTLD_LAZY);
 #endif
 
   if (!dl && error)
@@ -38,7 +38,7 @@ NativeLibrary LoadNativeLibrary(const std::string& library_path,
 void UnloadNativeLibrary(NativeLibrary library) {
 	if (library)
 	{
-		int ret = dlclose(library);
+		int ret = 0;//dlclose(library);
 		if (ret < 0) {
 			//DLOG(ERROR) << "dlclose failed: " << dlerror();
 			//NOTREACHED();

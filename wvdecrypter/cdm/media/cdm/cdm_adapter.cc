@@ -454,7 +454,7 @@ void CdmFileIoImpl::Read()
       if ((data_buffer_ = reinterpret_cast<uint8_t*>(malloc(sz))) == nullptr || fread(data_buffer_, 1, sz, file_descriptor_) != sz)
       status = cdm::FileIOClient::kError;
     }
-  } else 
+  } else
     status = cdm::FileIOClient::kSuccess;
   client_->OnReadComplete(status, data_buffer_, sz);
 }
@@ -466,8 +466,8 @@ void CdmFileIoImpl::Write(const uint8_t* data, uint32_t data_size)
 
   if (file_descriptor_)
   {
-  if (fwrite(data, 1, data_size, file_descriptor_) == data_size)
-    status = cdm::FileIOClient::kSuccess;
+    if (fwrite(data, 1, data_size, file_descriptor_) == data_size)
+      status = cdm::FileIOClient::kSuccess;
   }
   client_->OnWriteComplete(status);
 }
@@ -476,8 +476,8 @@ void CdmFileIoImpl::Close()
 {
   if (file_descriptor_)
   {
-  fclose(file_descriptor_);
-  file_descriptor_ = 0;
+    fclose(file_descriptor_);
+    file_descriptor_ = 0;
   }
   client_ = 0;
   free(reinterpret_cast<void*>(data_buffer_));
