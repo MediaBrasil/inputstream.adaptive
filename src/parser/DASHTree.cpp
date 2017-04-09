@@ -518,6 +518,7 @@ start(void *data, const char *el, const char **attr)
               dash->current_adaptationset_->type_ =
                 stricmp((const char*)*(attr + 1), "video") == 0 ? DASHTree::VIDEO
                 : stricmp((const char*)*(attr + 1), "audio") == 0 ? DASHTree::AUDIO
+                : stricmp((const char*)*(attr + 1), "text") == 0 ? DASHTree::SUBTITLE
                 : DASHTree::NOTYPE;
               break;
             }
@@ -575,10 +576,17 @@ start(void *data, const char *el, const char **attr)
                   dash->current_adaptationset_->type_ = DASHTree::VIDEO;
                 else if (strncmp(dash->current_adaptationset_->mimeType_.c_str(), "audio", 5) == 0)
                   dash->current_adaptationset_->type_ = DASHTree::AUDIO;
+                else if (strncmp(dash->current_adaptationset_->mimeType_.c_str(), "application", 11) == 0)
+                  dash->current_adaptationset_->type_ = DASHTree::SUBTITLE;
               }
             }
             attr += 2;
           }
+
+          if (dash->current_adaptationset_->type_ == DASHTree::SUBTITLE
+          && dash->current_adaptationset_->mimeType_ == "application/ttml+xml")
+            dash->current_representation_->flags_ |= DASHTree::Representation::SUBTITLESTREAM;
+
           dash->currentNode_ |= DASHTree::MPDNODE_REPRESENTATION;
         }
         else if (strcmp(el, "SegmentDurations") == 0)
@@ -667,6 +675,7 @@ start(void *data, const char *el, const char **attr)
             dash->current_adaptationset_->type_ =
             stricmp((const char*)*(attr + 1), "video") == 0 ? DASHTree::VIDEO
             : stricmp((const char*)*(attr + 1), "audio") == 0 ? DASHTree::AUDIO
+            : stricmp((const char*)*(attr + 1), "text") == 0 ? DASHTree::SUBTITLE
             : DASHTree::NOTYPE;
           else if (strcmp((const char*)*attr, "lang") == 0)
             dash->current_adaptationset_->language_ = ltranslate((const char*)*(attr + 1));
@@ -694,6 +703,8 @@ start(void *data, const char *el, const char **attr)
             dash->current_adaptationset_->type_ = DASHTree::VIDEO;
           else if (strncmp(dash->current_adaptationset_->mimeType_.c_str(), "audio", 5) == 0)
             dash->current_adaptationset_->type_ = DASHTree::AUDIO;
+          else if (strncmp(dash->current_adaptationset_->mimeType_.c_str(), "application", 11) == 0)
+            dash->current_adaptationset_->type_ = DASHTree::SUBTITLE;
         }
         dash->segcount_ = 0;
         dash->currentNode_ |= DASHTree::MPDNODE_ADAPTIONSET;
@@ -913,7 +924,7 @@ end(void *data, const char *el)
                   return;
                 }
               }
-              else if (!(dash->current_representation_->flags_ & DASHTree::Representation::SEGMENTBASE))
+              else if (!(dash->current_representation_->flags_ & (DASHTree::Representation::SEGMENTBASE | DASHTree::Representation::SUBTITLESTREAM)))
               {
                 //Let us try to extract the fragments out of SIDX atom  
                 dash->current_representation_->flags_ |= DASHTree::Representation::SEGMENTBASE;
