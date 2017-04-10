@@ -1542,7 +1542,7 @@ bool Session::initialize()
 
       UpdateStream(stream, caps);
 
-    } while (repId--);
+    } while (manual_streams_ && --repId);
   }
   return true;
 }

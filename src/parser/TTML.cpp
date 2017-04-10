@@ -32,19 +32,15 @@ start(void *data, const char *el, const char **attr)
       {
         if (ttml->m_node & TTML2SRT::NODE_P)
         {
-          if (ttml->m_node & TTML2SRT::NODE_SPAN)
-          {
-            if (strcmp(el, "br") == 0)
-              ttml->m_strXMLText += "\n";
-          }
-          else if (strcmp(el, "span") == 0)
-          {
-            ttml->m_strXMLText.clear();
-            ttml->m_node |= TTML2SRT::NODE_SPAN;
-          }
+          if (strcmp(el, "span") == 0)
+            {
+              ttml->m_strXMLText += "<i>";
+              ttml->m_node |= TTML2SRT::NODE_SPAN;
+            }
         }
         else if (strcmp(el, "p") == 0)
         {
+          ttml->m_strXMLText.clear();
           const char *b(0), *e(0), *id("");
 
           for (; *attr;)
@@ -84,7 +80,7 @@ text(void *data, const char *s, int len)
 {
   TTML2SRT *ttml(reinterpret_cast<TTML2SRT*>(data));
   
-  if (ttml->m_node & TTML2SRT::NODE_SPAN)
+  if (ttml->m_node & TTML2SRT::NODE_P)
     ttml->m_strXMLText += std::string(s, len);
 }
 
@@ -104,10 +100,15 @@ end(void *data, const char *el)
           if (strcmp(el, "span") == 0)
           {
             ttml->m_node &= ~TTML2SRT::NODE_SPAN;
-            ttml->StackText();
+            ttml->m_strXMLText += "</i>";
           }
           else if (strcmp(el, "p") == 0)
+          {
             ttml->m_node &= ~TTML2SRT::NODE_P;
+            ttml->StackText();
+          }
+          else if (strcmp(el, "br") == 0)
+            ttml->m_strXMLText += "\n";
         }
         else if (strcmp(el, "div") == 0)
           ttml->m_node &= ~TTML2SRT::NODE_DIV;
